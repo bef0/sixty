@@ -24,10 +24,14 @@ import Data.HashSet (HashSet)
 import Data.IntMap (IntMap)
 import Data.Persist as Persist
 import Data.Some (Some(Some))
+import qualified LLVM.AST as LLVM
 import Rock
 
 import Core.Binding (Binding)
+import qualified Assembly
 import qualified ClosureConverted.Syntax as ClosureConverted
+import Core.Binding (Binding)
+import qualified Core.Syntax as Syntax
 import Extra
 import qualified FileSystem
 import qualified LambdaLifted.Syntax as LambdaLifted
@@ -37,12 +41,11 @@ import Name (Name)
 import qualified Name
 import qualified Occurrences.Intervals as Occurrences
 import qualified Position
-import qualified Surface.Syntax as Surface
 import qualified Query.Mapped as Mapped
 import Scope (Scope)
 import qualified Scope
 import qualified Span
-import qualified Core.Syntax as Syntax
+import qualified Surface.Syntax as Surface
 import Telescope (Telescope)
 
 data Query a where
@@ -73,6 +76,9 @@ data Query a where
   ClosureConvertedType :: Name.Lifted -> Query (ClosureConverted.Type Void)
   ClosureConvertedConstructorType :: Name.QualifiedConstructor -> Query (Telescope Name ClosureConverted.Type ClosureConverted.Type Void)
   ConstructorTag :: Name.QualifiedConstructor -> Query (Maybe Int)
+
+  Assembly :: Name.Lifted -> Query (Maybe (Assembly.Definition Assembly.BasicBlock))
+  LLVM :: Name.Lifted -> Query (Maybe (LLVM.Name, [LLVM.Definition]))
 
 fetchImportedName
   :: MonadFetch Query m
@@ -121,6 +127,8 @@ instance Hashable (Query a) where
       ClosureConvertedType a -> h 23 a
       ClosureConvertedConstructorType a -> h 24 a
       ConstructorTag a -> h 25 a
+      Assembly a -> h 26 a
+      LLVM a -> h 27 a
     where
       {-# inline h #-}
       h :: Hashable a => Int -> a -> Int
@@ -166,6 +174,8 @@ instance Persist (Some Query) where
       23 -> Some . ClosureConvertedType <$> get
       24 -> Some . ClosureConvertedConstructorType <$> get
       25 -> Some . ConstructorTag <$> get
+      26 -> Some . Assembly <$> get
+      27 -> Some . LLVM <$> get
       _ -> fail "Persist (Some Query): no such tag"
 
   put (Some query) =
@@ -196,6 +206,8 @@ instance Persist (Some Query) where
       ClosureConvertedType a -> p 23 a
       ClosureConvertedConstructorType a -> p 24 a
       ConstructorTag a -> p 25 a
+      Assembly a -> p 26 a
+      LLVM a -> p 27 a
       -- Don't forget to add a case to `get` above!
     where
       p :: Persist a => Word8 -> a -> Put ()

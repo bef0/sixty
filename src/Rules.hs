@@ -27,12 +27,16 @@ import qualified Builtin
 import qualified ClosureConversion
 import qualified ClosureConverted.Context
 import qualified ClosureConverted.Syntax
+import qualified Assembler
 import qualified ClosureConverted.TypeOf as ClosureConverted
+import qualified CodeGeneration
+import Core.Binding (Binding)
+import qualified Core.Evaluation as Evaluation
+import qualified Core.Syntax as Syntax
 import qualified Elaboration
 import qualified Environment
 import Error (Error)
 import qualified Error
-import qualified Core.Evaluation as Evaluation
 import qualified LambdaLifted.Syntax as LambdaLifted
 import qualified LambdaLifting
 import qualified Lexer
@@ -45,13 +49,12 @@ import qualified Parser
 import qualified Paths_sixty as Paths
 import Plicity
 import qualified Position
-import qualified Surface.Syntax as Surface
 import Query
 import qualified Query.Mapped as Mapped
 import qualified Resolution
 import qualified Scope
 import qualified Span
-import qualified Core.Syntax as Syntax
+import qualified Surface.Syntax as Surface
 import Telescope (Telescope)
 import qualified Telescope
 
@@ -502,6 +505,19 @@ rules sourceDirectories files readFile_ (Writer (Writer query)) =
 
           _ ->
             pure Nothing
+
+
+    Assembly name -> 
+      noError $ do
+        maybeDef <- fetch $ ClosureConverted name
+        fmap join $ forM maybeDef $
+          runM . CodeGeneration.generateDefinition name
+
+
+    LLVM name ->
+      noError $ do
+        maybeAssembly <- fetch $ Assembly name
+        pure $ Assembler.assembleDefinition name <$> maybeAssembly
 
   where
     input :: Functor m => m a -> m ((a, TaskKind), [Error])
