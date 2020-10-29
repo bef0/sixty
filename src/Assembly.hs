@@ -5,11 +5,13 @@
 {-# language OverloadedStrings #-}
 module Assembly where
 
-import Protolude hiding (local)
+import Protolude hiding (local, IntSet)
 
 import Data.Persist
 import Data.Text.Prettyprint.Doc
 
+import qualified Data.IntSet as IntSet
+import Data.IntSet (IntSet)
 import Literal (Literal)
 import qualified Name
 
@@ -127,3 +129,81 @@ instance Pretty basicBlock => Pretty (Definition basicBlock) where
 instance Pretty BasicBlock where
   pretty (BasicBlock instrs) =
     vcat $ pretty <$> instrs
+
+-------------------------------------------------------------------------------
+
+data BasicBlockWithOccurrences
+  = Nil
+  | Cons (IntSet Assembly.Local) (Assembly.Instruction BasicBlockWithOccurrences) BasicBlockWithOccurrences
+
+cons :: Assembly.Instruction BasicBlockWithOccurrences -> BasicBlockWithOccurrences -> BasicBlockWithOccurrences
+cons instruction basicBlock =
+  Cons (instructionOccurrences instruction <> basicBlockOccurrences basicBlock) instruction basicBlock
+
+basicBlockWithOccurrences :: Assembly.BasicBlock -> BasicBlockWithOccurrences
+basicBlockWithOccurrences (Assembly.BasicBlock instructions) =
+  case instructions of
+    [] ->
+      Nil
+
+    instruction : instructions' ->
+      cons
+        (basicBlockWithOccurrences <$> instruction)
+        (basicBlockWithOccurrences $ Assembly.BasicBlock instructions')
+
+basicBlockOccurrences :: BasicBlockWithOccurrences -> IntSet Assembly.Local
+basicBlockOccurrences basicBlock =
+  case basicBlock of
+    Nil ->
+      mempty
+
+    Cons occurrences _ _ ->
+      occurrences
+
+instructionOccurrences :: Assembly.Instruction BasicBlockWithOccurrences -> IntSet Assembly.Local
+instructionOccurrences instruction =
+  case instruction of
+    Assembly.Copy o1 o2 o3 ->
+      operandOccurrences o1 <> operandOccurrences o2 <> operandOccurrences o3
+
+    Assembly.Call l o os ->
+      IntSet.singleton l <> operandOccurrences o <> foldMap operandOccurrences os
+
+    Assembly.CallVoid o os ->
+      operandOccurrences o <> foldMap operandOccurrences os
+
+    Assembly.Load l o ->
+      IntSet.singleton l <> operandOccurrences o
+
+    Assembly.Store o1 o2 ->
+      operandOccurrences o1 <> operandOccurrences o2
+
+    Assembly.Add l o1 o2 ->
+      IntSet.singleton l <> operandOccurrences o1 <> operandOccurrences o2
+
+    Assembly.Sub l o1 o2 ->
+      IntSet.singleton l <> operandOccurrences o1 <> operandOccurrences o2
+
+    Assembly.PointerToInt l o ->
+      IntSet.singleton l <> operandOccurrences o
+
+    Assembly.IntToPointer l o ->
+      IntSet.singleton l <> operandOccurrences o
+
+    Assembly.HeapAllocate l o ->
+      IntSet.singleton l <> operandOccurrences o
+
+    Assembly.Switch o brs d ->
+      operandOccurrences o <> foldMap (basicBlockOccurrences . snd) brs <> basicBlockOccurrences d
+
+operandOccurrences :: Assembly.Operand -> IntSet Assembly.Local
+operandOccurrences operand =
+  case operand of
+    Assembly.LocalOperand local ->
+      IntSet.singleton local
+
+    Assembly.Global _ ->
+      mempty
+
+    Assembly.Lit _ ->
+      mempty
