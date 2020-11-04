@@ -16,11 +16,11 @@ data Instruction
   | PointerToInt !Local !Operand
   | IntToPointer !Local !Operand
   | HeapAllocate !Local !Operand
-  | Switch !Operand [(Int, Terminator)] Terminator
   deriving (Show, Generic, Persist, Hashable)
 
 data Terminator
-  = TailCall !Operand [Operand]
+  = Switch !Operand [(Int, Terminator)] Terminator
+  | TailCall !Operand [Operand]
   deriving (Show, Generic, Persist, Hashable)
 
 data BasicBlock = BasicBlock [Instruction] !Terminator

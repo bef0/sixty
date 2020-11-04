@@ -2,10 +2,12 @@ module CPS where
 
 import qualified Assembly
 import qualified CPSAssembly
+import Data.IntSet (IntSet)
+import qualified Data.IntSet as IntSet
 import Data.Tsil (Tsil)
 import qualified Data.Tsil as Tsil
 import qualified Name
-import Protolude
+import Protolude hiding (IntSet)
 
 data ConverterState = ConverterState
   { _baseDefinitionName :: !Name.Lifted
@@ -26,33 +28,38 @@ convertDefinition :: Assembly.Definition Assembly.BasicBlock -> CPSAssembly.Defi
 convertDefinition definition =
   _
 
-convertBasicBlock
-  :: Assembly.Instruction Assembly.BasicBlockWithOccurrences
-  -> Converter CPSAssembly.BasicBlock
-convertBasicBlock basicBlock =
+convertBasicBlock :: IntSet Assembly.Local -> Assembly.BasicBlock -> Converter CPSAssembly.BasicBlock
+convertBasicBlock liveLocals basicBlock =
   case basicBlock of
     Assembly.Nil ->
-      undefined
+      return ()
 
-    Assembly.Cons occurrences instruction basicBlock' ->
-      undefined
+    Assembly.Cons _ instruction basicBlock' -> do
+      assembleInstruction (liveLocals <> basicBlockOccurrences basicBlock') instruction
+      convertBasicBlock liveLocals basicBlock'
 
 convertInstruction
-  :: Assembly.Instruction Assembly.BasicBlockWithOccurrences
+  :: IntSet Assembly.Local
+  -> Assembly.Instruction Assembly.BasicBlockWithOccurrences
   -> Converter ()
-convertInstruction instr =
+convertInstruction liveLocals instr =
   case instr of
     Assembly.Copy o1 o2 o3 ->
       emitInstruction $ CPSAssembly.Copy o1 o2 o3
 
     Assembly.Call l o os ->
+      -- push live locals
+      -- push continuation function name
+      -- tail call function
+      -- start new definition for the continuation
+      -- pop locals
       undefined
 
     Assembly.CallVoid o os ->
       undefined
 
     Assembly.Load l o ->
-      emitInstruction $ CPSAssembly.Copy l o
+      emitInstruction $ CPSAssembly.Load l o
 
     Assembly.Store o1 o2 ->
       emitInstruction $ CPSAssembly.Store o1 o2
