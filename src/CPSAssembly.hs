@@ -4,8 +4,11 @@ module CPSAssembly where
 
 import Assembly (Local, Operand)
 import qualified Assembly 
-import Protolude
 import Data.Persist
+import qualified Name
+import Protolude
+
+data Name = Name !Name.Lifted !Int
 
 data Instruction
   = Copy !Operand !Operand !Operand
@@ -16,14 +19,14 @@ data Instruction
   | PointerToInt !Local !Operand
   | IntToPointer !Local !Operand
   | HeapAllocate !Local !Operand
-  deriving (Show, Generic, Persist, Hashable)
+  deriving (Show, Generic, Persist)
 
 data Terminator
   = Switch !Operand [(Int, Terminator)] Terminator
   | TailCall !Operand [Operand]
-  deriving (Show, Generic, Persist, Hashable)
+  deriving (Show, Generic, Persist)
 
 data BasicBlock = BasicBlock [Instruction] !Terminator
-  deriving (Show, Generic, Persist, Hashable)
+  deriving (Show, Generic, Persist)
 
 type Definition = Assembly.Definition BasicBlock
