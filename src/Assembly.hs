@@ -18,9 +18,19 @@ import qualified Name
 newtype Local = Local Int
   deriving (Eq, Ord, Show, Generic, Persist, Hashable)
 
+data Name = Name !Name.Lifted !Int
+  deriving (Show, Generic, Persist, Hashable)
+
+instance Pretty Name where
+  pretty (Name name 0) =
+    pretty name
+
+  pretty (Name name n) =
+    pretty name <> "$" <> pretty n
+
 data Operand
   = LocalOperand !Local
-  | Global !Name.Lifted
+  | Global !Name
   | Lit !Literal
   deriving (Show, Generic, Persist, Hashable)
 

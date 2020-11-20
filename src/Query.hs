@@ -30,7 +30,6 @@ import Rock
 import Core.Binding (Binding)
 import qualified Assembly
 import qualified ClosureConverted.Syntax as ClosureConverted
-import Core.Binding (Binding)
 import qualified Core.Syntax as Syntax
 import Extra
 import qualified FileSystem

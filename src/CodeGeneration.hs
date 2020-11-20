@@ -24,7 +24,7 @@ import qualified Data.Tsil as Tsil
 import Index
 import qualified Literal
 import Monad
-import Name (Name(Name))
+import Name (Name)
 import qualified Name
 import Query (Query)
 import qualified Query
@@ -32,7 +32,6 @@ import qualified Scope
 import Telescope (Telescope)
 import qualified Telescope
 import Var (Var(Var))
-import qualified Var
 
 newtype Builder a = Builder (StateT BuilderState M a)
   deriving (Functor, Applicative, Monad, MonadIO, MonadFetch Query, MonadState BuilderState)
@@ -97,8 +96,8 @@ indexLocation index env = do
     IntMap.lookup var $ _varLocations env
 
 globalLocation :: Name.Lifted -> PointerOperand
-globalLocation =
-  PointerOperand . Assembly.Global
+globalLocation name =
+  PointerOperand $ Assembly.Global $ Assembly.Name name 0
 
 stackAllocate :: IntOperand -> Builder PointerOperand
 stackAllocate size = do
@@ -161,7 +160,7 @@ copy (PointerOperand destination) (PointerOperand source) (IntOperand size) =
 
 call :: Name.Lifted -> [PointerOperand] -> PointerOperand -> Builder ()
 call global args returnLocation =
-  emit $ Assembly.CallVoid (Assembly.Global global) (coerce $ returnLocation : args)
+  emit $ Assembly.CallVoid (Assembly.Global $ Assembly.Name global 0) (coerce $ returnLocation : args)
 
 load :: PointerOperand -> Builder IntOperand
 load (PointerOperand pointer) = do

@@ -5,10 +5,7 @@ module CPSAssembly where
 import Assembly (Local, Operand)
 import qualified Assembly 
 import Data.Persist
-import qualified Name
 import Protolude
-
-data Name = Name !Name.Lifted !Int
 
 data Instruction
   = Copy !Operand !Operand !Operand
