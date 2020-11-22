@@ -27,10 +27,11 @@ import Data.Some (Some(Some))
 import qualified LLVM.AST as LLVM
 import Rock
 
-import Core.Binding (Binding)
 import qualified Assembly
 import qualified ClosureConverted.Syntax as ClosureConverted
+import Core.Binding (Binding)
 import qualified Core.Syntax as Syntax
+import qualified CPSAssembly
 import Extra
 import qualified FileSystem
 import qualified LambdaLifted.Syntax as LambdaLifted
@@ -76,7 +77,8 @@ data Query a where
   ClosureConvertedConstructorType :: Name.QualifiedConstructor -> Query (Telescope Name ClosureConverted.Type ClosureConverted.Type Void)
   ConstructorTag :: Name.QualifiedConstructor -> Query (Maybe Int)
 
-  Assembly :: Name.Lifted -> Query (Maybe (Assembly.Definition Assembly.BasicBlock))
+  Assembly :: Name.Lifted -> Query (Maybe (Assembly.Definition Assembly.BasicBlock, Int))
+  CPSAssembly :: Name.Lifted -> Query [(Assembly.Name, CPSAssembly.Definition)]
   LLVM :: Name.Lifted -> Query (Maybe (LLVM.Name, [LLVM.Definition]))
 
 fetchImportedName
@@ -127,7 +129,8 @@ instance Hashable (Query a) where
       ClosureConvertedConstructorType a -> h 24 a
       ConstructorTag a -> h 25 a
       Assembly a -> h 26 a
-      LLVM a -> h 27 a
+      CPSAssembly a -> h 27 a
+      LLVM a -> h 28 a
     where
       {-# inline h #-}
       h :: Hashable a => Int -> a -> Int
@@ -174,7 +177,8 @@ instance Persist (Some Query) where
       24 -> Some . ClosureConvertedConstructorType <$> get
       25 -> Some . ConstructorTag <$> get
       26 -> Some . Assembly <$> get
-      27 -> Some . LLVM <$> get
+      27 -> Some . CPSAssembly <$> get
+      28 -> Some . LLVM <$> get
       _ -> fail "Persist (Some Query): no such tag"
 
   put (Some query) =
@@ -206,7 +210,8 @@ instance Persist (Some Query) where
       ClosureConvertedConstructorType a -> p 24 a
       ConstructorTag a -> p 25 a
       Assembly a -> p 26 a
-      LLVM a -> p 27 a
+      CPSAssembly a -> p 27 a
+      LLVM a -> p 28 a
       -- Don't forget to add a case to `get` above!
     where
       p :: Persist a => Word8 -> a -> Put ()

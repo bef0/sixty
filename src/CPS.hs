@@ -1,4 +1,5 @@
 {-# language GeneralizedNewtypeDeriving #-}
+{-# language OverloadedStrings #-}
 
 module CPS where
 
@@ -19,13 +20,13 @@ data ConverterState = ConverterState
   { _fresh :: !Int
   , _baseDefinitionName :: !Name.Lifted
   , _nextDefinitionName :: !Int
-  , _finishDefinition :: !(Tsil CPSAssembly.Instruction -> CPSAssembly.Terminator -> (Assembly.Name, CPSAssembly.Definition))
+  , _finishDefinition :: !(CPSAssembly.BasicBlock -> (Assembly.Name, CPSAssembly.Definition))
   , _definitions :: Tsil (Assembly.Name, CPSAssembly.Definition)
   , _instructions :: Tsil CPSAssembly.Instruction
   , _stackPointer :: !Assembly.Local
   }
 
-newtype Converter a = Converter { unCPS :: State ConverterState a }
+newtype Converter a = Converter { unConverter :: State ConverterState a }
   deriving (Functor, Applicative, Monad, MonadState ConverterState)
 
 emitInstruction :: CPSAssembly.Instruction -> Converter ()
@@ -35,13 +36,11 @@ emitInstruction instruction =
 terminate :: CPSAssembly.Terminator -> Converter ()
 terminate terminator =
   modify $ \s -> s
-    { _definitions = _definitions s Tsil.:> _finishDefinition s (_instructions s) terminator
+    { _definitions = _definitions s Tsil.:> _finishDefinition s (CPSAssembly.BasicBlock (toList $ _instructions s) terminator)
     , _instructions = mempty
     }
 
-startDefinition
-  :: (Tsil CPSAssembly.Instruction -> CPSAssembly.Terminator -> (Assembly.Name, CPSAssembly.Definition))
-  -> Converter ()
+startDefinition :: (CPSAssembly.BasicBlock -> (Assembly.Name, CPSAssembly.Definition)) -> Converter ()
 startDefinition finishDefinition =
   modify $ \s -> s { _finishDefinition = finishDefinition }
 
@@ -107,8 +106,34 @@ popLocals =
 
 -------------------------------------------------------------------------------
 
-convertDefinition :: Assembly.Definition Assembly.BasicBlock -> CPSAssembly.Definition
-convertDefinition definition = _
+convertDefinition
+  :: Int
+  -> Name.Lifted
+  -> Assembly.Definition Assembly.BasicBlock
+  -> [(Assembly.Name, CPSAssembly.Definition)]
+convertDefinition fresh name definition =
+  case definition of
+    Assembly.ConstantDefinition {} ->
+      panic "CPS.convertDefinition ConstantDefinition" -- TODO
+
+    Assembly.FunctionDefinition stackPointer arguments basicBlock ->
+      toList $
+      _definitions $
+      flip execState ConverterState
+        { _fresh = fresh
+        , _baseDefinitionName = name
+        , _nextDefinitionName = 1
+        , _finishDefinition =
+          \basicBlock' ->
+            ( Assembly.Name name 0
+            , Assembly.FunctionDefinition stackPointer arguments basicBlock'
+            )
+        , _definitions = mempty
+        , _instructions = mempty
+        , _stackPointer = stackPointer
+        } $
+      unConverter $ do
+        convertBasicBlock (IntSet.fromList arguments) $ Assembly.basicBlockWithOccurrences basicBlock
 
 convertBasicBlock :: IntSet Assembly.Local -> Assembly.BasicBlockWithOccurrences -> Converter ()
 convertBasicBlock liveLocals basicBlock =
@@ -137,12 +162,9 @@ convertInstruction liveLocals instr =
       push $ Assembly.Global continuationFunctionName
       terminate $ CPSAssembly.TailCall function arguments
       stackPointer <- gets _stackPointer
-      startDefinition $ \instructions terminator -> 
+      startDefinition $ \basicBlock ->
         ( continuationFunctionName
-        , Assembly.FunctionDefinition
-          stackPointer
-          [result]
-          (CPSAssembly.BasicBlock (toList instructions) terminator)
+        , Assembly.FunctionDefinition stackPointer [result] basicBlock
         )
       popLocals liveLocals
 
@@ -152,12 +174,9 @@ convertInstruction liveLocals instr =
       push $ Assembly.Global continuationFunctionName
       terminate $ CPSAssembly.TailCall function arguments
       stackPointer <- gets _stackPointer
-      startDefinition $ \instructions terminator -> 
+      startDefinition $ \basicBlock ->
         ( continuationFunctionName
-        , Assembly.FunctionDefinition
-          stackPointer
-          []
-          (CPSAssembly.BasicBlock (toList instructions) terminator)
+        , Assembly.FunctionDefinition stackPointer [] basicBlock
         )
       popLocals liveLocals
 
@@ -212,19 +231,13 @@ convertInstruction liveLocals instr =
       terminate $ CPSAssembly.Switch scrutinee branchTerminators defaultTerminator
       stackPointer <- gets _stackPointer
       forM_ branches' $ \(_, continuationFunctionName, locals, basicBlock) -> do
-        startDefinition $ \instructions terminator ->
+        startDefinition $ \basicBlock' ->
           ( continuationFunctionName
-          , Assembly.FunctionDefinition
-            stackPointer
-            locals
-            (CPSAssembly.BasicBlock (toList instructions) terminator)
+          , Assembly.FunctionDefinition stackPointer locals basicBlock'
           )
         convertBasicBlock liveLocals basicBlock
-      startDefinition $ \instructions terminator ->
+      startDefinition $ \basicBlock ->
         ( defaultContinuationFunctionName
-        , Assembly.FunctionDefinition
-          stackPointer
-          defaultLocals
-          (CPSAssembly.BasicBlock (toList instructions) terminator)
+        , Assembly.FunctionDefinition stackPointer defaultLocals basicBlock
         )
       convertBasicBlock liveLocals default_

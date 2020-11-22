@@ -22,17 +22,18 @@ import qualified Data.Text.Unsafe as Text
 import Rock
 import System.FilePath
 
-import Core.Binding (Binding)
+import qualified Assembler
 import qualified Builtin
 import qualified ClosureConversion
 import qualified ClosureConverted.Context
 import qualified ClosureConverted.Syntax
-import qualified Assembler
 import qualified ClosureConverted.TypeOf as ClosureConverted
 import qualified CodeGeneration
 import Core.Binding (Binding)
+import Core.Binding (Binding)
 import qualified Core.Evaluation as Evaluation
 import qualified Core.Syntax as Syntax
+import qualified CPS
 import qualified Elaboration
 import qualified Environment
 import Error (Error)
@@ -57,6 +58,7 @@ import qualified Span
 import qualified Surface.Syntax as Surface
 import Telescope (Telescope)
 import qualified Telescope
+import Var (Var(Var))
 
 rules :: [FilePath] -> HashSet FilePath -> (FilePath -> IO Text) -> GenRules (Writer [Error] (Writer TaskKind Query)) Query
 rules sourceDirectories files readFile_ (Writer (Writer query)) =
@@ -507,17 +509,25 @@ rules sourceDirectories files readFile_ (Writer (Writer query)) =
             pure Nothing
 
 
-    Assembly name -> 
+    Assembly name ->
       noError $ do
-        maybeDef <- fetch $ ClosureConverted name
-        fmap join $ forM maybeDef $
-          runM . CodeGeneration.generateDefinition name
+        maybeDefinition <- fetch $ ClosureConverted name
+        fmap join $ forM maybeDefinition $ \definition ->
+          runM $ do
+            result <- CodeGeneration.generateDefinition name definition
+            Var fresh <- freshVar
+            pure $ (, fresh) <$> result
 
+    CPSAssembly name ->
+      noError $ do
+        maybeAssemblyDefinition <- fetch $ Assembly name
+        pure $ fold $ foreach maybeAssemblyDefinition $ \(assemblyDefinition, fresh) ->
+          CPS.convertDefinition fresh name assemblyDefinition
 
     LLVM name ->
       noError $ do
         maybeAssembly <- fetch $ Assembly name
-        pure $ Assembler.assembleDefinition name <$> maybeAssembly
+        pure $ Assembler.assembleDefinition name . fst <$> maybeAssembly
 
   where
     input :: Functor m => m a -> m ((a, TaskKind), [Error])

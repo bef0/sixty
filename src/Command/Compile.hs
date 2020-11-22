@@ -37,9 +37,11 @@ compile argumentFiles = do
         cc <- fetch $ Query.ClosureConverted $ Name.Lifted name 0
         liftIO $ print cc
         assembly <- fetch $ Query.Assembly $ Name.Lifted name 0
-        llvm <- fetch $ Query.LLVM $ Name.Lifted name 0
-        liftIO $ putDoc $ pretty assembly
-        liftIO $ putDoc $ pretty llvm
+        cpsAssembly <- fetch $ Query.CPSAssembly $ Name.Lifted name 0
+        -- llvm <- fetch $ Query.LLVM $ Name.Lifted name 0
+        -- liftIO $ putDoc $ pretty assembly
+        liftIO $ putDoc $ pretty cpsAssembly
+        -- liftIO $ putDoc $ pretty llvm
         putText ""
   endTime <- getCurrentTime
   forM_ errs $ \err ->
