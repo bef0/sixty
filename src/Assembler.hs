@@ -80,12 +80,6 @@ instructionOccurrences instruction =
     Assembly.Sub l o1 o2 ->
       IntSet.singleton l <> operandOccurrences o1 <> operandOccurrences o2
 
-    Assembly.PointerToInt l o ->
-      IntSet.singleton l <> operandOccurrences o
-
-    Assembly.IntToPointer l o ->
-      IntSet.singleton l <> operandOccurrences o
-
     Assembly.HeapAllocate l o ->
       IntSet.singleton l <> operandOccurrences o
 
@@ -524,13 +518,13 @@ assembleDefinition name definition =
     } $
   unAssembler $
   case definition of
-    Assembly.ConstantDefinition stackPointer _ -> do
+    Assembly.ConstantDefinition _ -> do
       undefined
 
-    Assembly.FunctionDefinition stackPointer arguments basicBlock -> do
+    Assembly.FunctionDefinition arguments basicBlock -> do
       name' <- freshFunctionName
       modify $ \s -> s
-        { _stackPointer = stackPointer
+        { _stackPointer = undefined
         }
       startNewBlockFunction name' arguments
       startNewBlock =<< freshUnName
@@ -605,15 +599,11 @@ assembleInstruction liveLocals instruction =
       result <- sub operand1' operand2'
       activateLocal destination result
 
-    Assembly.PointerToInt destination operand -> do
-      operand' <- assembleOperand operand
-      result <- ptrtoint operand'
-      activateLocal destination result
+    Assembly.StackAllocate l o ->
+      undefined
 
-    Assembly.IntToPointer destination operand -> do
-      operand' <- assembleOperand operand
-      result <- inttoptr operand'
-      activateLocal destination result
+    Assembly.StackDeallocate o ->
+      undefined
 
     Assembly.HeapAllocate l o ->
       undefined

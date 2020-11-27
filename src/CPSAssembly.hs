@@ -15,8 +15,6 @@ data Instruction
   | Store !Operand !Operand
   | Add !Local !Operand !Operand
   | Sub !Local !Operand !Operand
-  | PointerToInt !Local !Operand
-  | IntToPointer !Local !Operand
   | HeapAllocate !Local !Operand
   deriving (Show, Generic, Hashable, Persist)
 
@@ -48,12 +46,6 @@ instance Pretty Instruction where
       Sub dst arg1 arg2 ->
         returningInstr dst "sub" [arg1, arg2]
 
-      PointerToInt dst arg ->
-        returningInstr dst "ptrtoint" [arg]
-
-      IntToPointer dst arg ->
-        returningInstr dst "inttoptr" [arg]
-
       HeapAllocate dst size ->
         returningInstr dst "gcmalloc" [size]
     where
@@ -67,7 +59,7 @@ instance Pretty Terminator where
   pretty terminator =
     case terminator of
       TailCall fun args ->
-        "tail call" <+> hsep (pretty <$> fun : args)
+        "tail call" <+> pretty fun <> tupled (pretty <$> args)
 
       Switch scrutinee branches default_ ->
         "switch" <+> pretty scrutinee <> line <>

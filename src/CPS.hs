@@ -104,6 +104,23 @@ popLocals :: IntSet Assembly.Local -> Converter ()
 popLocals =
   mapM_ pop . IntSet.toList
 
+stackAllocate :: Assembly.Local -> Assembly.Operand -> Converter ()
+stackAllocate destination size = do
+  stackPointer <- gets _stackPointer
+  emitInstruction $ CPSAssembly.Sub destination (Assembly.LocalOperand stackPointer) size
+  modify $ \s -> s
+    { _stackPointer = stackPointer
+    }
+
+stackDeallocate :: Assembly.Operand -> Converter ()
+stackDeallocate size = do
+  stackPointer <- gets _stackPointer
+  newStackPointer <- freshLocal
+  emitInstruction $ CPSAssembly.Add newStackPointer (Assembly.LocalOperand stackPointer) size
+  modify $ \s -> s
+    { _stackPointer = newStackPointer
+    }
+
 -------------------------------------------------------------------------------
 
 convertDefinition
@@ -116,24 +133,25 @@ convertDefinition fresh name definition =
     Assembly.ConstantDefinition {} ->
       panic "CPS.convertDefinition ConstantDefinition" -- TODO
 
-    Assembly.FunctionDefinition stackPointer arguments basicBlock ->
+    Assembly.FunctionDefinition arguments basicBlock -> do
+      let stackPointer = Assembly.Local fresh
       toList $
-      _definitions $
-      flip execState ConverterState
-        { _fresh = fresh
-        , _baseDefinitionName = name
-        , _nextDefinitionName = 1
-        , _finishDefinition =
-          \basicBlock' ->
-            ( Assembly.Name name 0
-            , Assembly.FunctionDefinition stackPointer arguments basicBlock'
-            )
-        , _definitions = mempty
-        , _instructions = mempty
-        , _stackPointer = stackPointer
-        } $
-      unConverter $ do
-        convertBasicBlock (IntSet.fromList arguments) $ Assembly.basicBlockWithOccurrences basicBlock
+        _definitions $
+        flip execState ConverterState
+          { _fresh = fresh + 1
+          , _baseDefinitionName = name
+          , _nextDefinitionName = 1
+          , _finishDefinition =
+            \basicBlock' ->
+              ( Assembly.Name name 0
+              , Assembly.FunctionDefinition (stackPointer : arguments) basicBlock'
+              )
+          , _definitions = mempty
+          , _instructions = mempty
+          , _stackPointer = stackPointer
+          } $
+        unConverter $ do
+          convertBasicBlock (IntSet.fromList $ stackPointer : arguments) $ Assembly.basicBlockWithOccurrences basicBlock
 
 convertBasicBlock :: IntSet Assembly.Local -> Assembly.BasicBlockWithOccurrences -> Converter ()
 convertBasicBlock liveLocals basicBlock =
@@ -164,7 +182,7 @@ convertInstruction liveLocals instr =
       stackPointer <- gets _stackPointer
       startDefinition $ \basicBlock ->
         ( continuationFunctionName
-        , Assembly.FunctionDefinition stackPointer [result] basicBlock
+        , Assembly.FunctionDefinition [stackPointer, result] basicBlock
         )
       popLocals liveLocals
 
@@ -176,7 +194,7 @@ convertInstruction liveLocals instr =
       stackPointer <- gets _stackPointer
       startDefinition $ \basicBlock ->
         ( continuationFunctionName
-        , Assembly.FunctionDefinition stackPointer [] basicBlock
+        , Assembly.FunctionDefinition [stackPointer] basicBlock
         )
       popLocals liveLocals
 
@@ -192,11 +210,11 @@ convertInstruction liveLocals instr =
     Assembly.Sub l o1 o2 ->
       emitInstruction $ CPSAssembly.Sub l o1 o2
 
-    Assembly.PointerToInt l o ->
-      emitInstruction $ CPSAssembly.PointerToInt l o
+    Assembly.StackAllocate l o ->
+      stackAllocate l o
 
-    Assembly.IntToPointer l o ->
-      emitInstruction $ CPSAssembly.IntToPointer l o
+    Assembly.StackDeallocate o ->
+      stackDeallocate o
 
     Assembly.HeapAllocate l o ->
       emitInstruction $ CPSAssembly.HeapAllocate l o
@@ -233,11 +251,11 @@ convertInstruction liveLocals instr =
       forM_ branches' $ \(_, continuationFunctionName, locals, basicBlock) -> do
         startDefinition $ \basicBlock' ->
           ( continuationFunctionName
-          , Assembly.FunctionDefinition stackPointer locals basicBlock'
+          , Assembly.FunctionDefinition (stackPointer : locals) basicBlock'
           )
         convertBasicBlock liveLocals basicBlock
       startDefinition $ \basicBlock ->
         ( defaultContinuationFunctionName
-        , Assembly.FunctionDefinition stackPointer defaultLocals basicBlock
+        , Assembly.FunctionDefinition (stackPointer : defaultLocals) basicBlock
         )
       convertBasicBlock liveLocals default_

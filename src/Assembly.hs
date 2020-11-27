@@ -42,15 +42,15 @@ data Instruction basicBlock
   | Store !Operand !Operand
   | Add !Local !Operand !Operand
   | Sub !Local !Operand !Operand
-  | PointerToInt !Local !Operand
-  | IntToPointer !Local !Operand
+  | StackAllocate !Local !Operand
+  | StackDeallocate !Operand
   | HeapAllocate !Local !Operand
   | Switch !Operand [(Int, basicBlock)] basicBlock
   deriving (Show, Generic, Persist, Hashable, Functor)
 
 data Definition basicBlock
-  = ConstantDefinition !StackPointer basicBlock
-  | FunctionDefinition !StackPointer [Local] basicBlock
+  = ConstantDefinition basicBlock
+  | FunctionDefinition [Local] basicBlock
   deriving (Show, Generic, Persist, Hashable, Functor)
 
 type StackPointer = Local
@@ -98,11 +98,11 @@ instance Pretty basicBlock => Pretty (Instruction basicBlock) where
       Sub dst arg1 arg2 ->
         returningInstr dst "sub" [arg1, arg2]
 
-      PointerToInt dst arg ->
-        returningInstr dst "ptrtoint" [arg]
+      StackAllocate dst size ->
+        returningInstr dst "alloca" [size]
 
-      IntToPointer dst arg ->
-        returningInstr dst "inttoptr" [arg]
+      StackDeallocate size ->
+        voidInstr "dealloca" [size]
 
       HeapAllocate dst size ->
         returningInstr dst "gcmalloc" [size]
@@ -128,12 +128,11 @@ instance Pretty basicBlock => Pretty (Instruction basicBlock) where
 instance Pretty basicBlock => Pretty (Definition basicBlock) where
   pretty definition =
     case definition of
-      ConstantDefinition stackPointer basicBlock ->
-        braces (pretty stackPointer) <+> "->" <> line <>
+      ConstantDefinition basicBlock ->
         indent 2 (pretty basicBlock)
 
-      FunctionDefinition stackPointer args basicBlock ->
-        tupled (pretty <$> stackPointer : args) <+> "->" <> line <>
+      FunctionDefinition args basicBlock ->
+        tupled (pretty <$> args) <+> "->" <> line <>
           indent 2 (pretty basicBlock)
 
 instance Pretty BasicBlock where
@@ -194,11 +193,11 @@ instructionOccurrences instruction =
     Assembly.Sub l o1 o2 ->
       IntSet.singleton l <> operandOccurrences o1 <> operandOccurrences o2
 
-    Assembly.PointerToInt l o ->
+    Assembly.StackAllocate l o ->
       IntSet.singleton l <> operandOccurrences o
 
-    Assembly.IntToPointer l o ->
-      IntSet.singleton l <> operandOccurrences o
+    Assembly.StackDeallocate o ->
+      operandOccurrences o
 
     Assembly.HeapAllocate l o ->
       IntSet.singleton l <> operandOccurrences o

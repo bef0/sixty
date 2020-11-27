@@ -36,16 +36,14 @@ import Var (Var(Var))
 newtype Builder a = Builder (StateT BuilderState M a)
   deriving (Functor, Applicative, Monad, MonadIO, MonadFetch Query, MonadState BuilderState)
 
-data BuilderState = BuilderState
+newtype BuilderState = BuilderState
   { _instructions :: Tsil (Assembly.Instruction Assembly.BasicBlock)
-  , _stackPointer :: !PointerOperand
   }
 
-runBuilder :: PointerOperand -> Builder a -> M (a, Assembly.BasicBlock)
-runBuilder stackPointer (Builder s) =
+runBuilder :: Builder a -> M (a, Assembly.BasicBlock)
+runBuilder (Builder s) =
   second (Assembly.BasicBlock . toList . _instructions) <$> runStateT s BuilderState
     { _instructions = mempty
-    , _stackPointer = stackPointer
     }
 
 emit :: Assembly.Instruction Assembly.BasicBlock -> Builder ()
@@ -54,13 +52,9 @@ emit instruction =
 
 -------------------------------------------------------------------------------
 
-newtype StackPointerOperand = StackPointerOperand Assembly.Operand
-newtype PointerOperand = PointerOperand Assembly.Operand
-newtype IntOperand = IntOperand Assembly.Operand
-
 data Environment v = Environment
   { _context :: Context v
-  , _varLocations :: IntMap Var PointerOperand
+  , _varLocations :: IntMap Var Assembly.Operand
   }
 
 emptyEnvironment :: Scope.KeyedName -> Environment Void
@@ -70,7 +64,7 @@ emptyEnvironment scopeKey =
     , _varLocations = mempty
     }
 
-extend :: Environment v -> Syntax.Type v -> PointerOperand -> Builder (Environment (Succ v))
+extend :: Environment v -> Syntax.Type v -> Assembly.Operand -> Builder (Environment (Succ v))
 extend env type_ location =
   Builder $ lift $ do
     type' <- Evaluation.evaluate (Context.toEnvironment $ _context env) type_
@@ -81,13 +75,13 @@ extend env type_ location =
       }
 
 data Return = Return
-  { _returnLocation :: !PointerOperand
-  , _returnTypeSize :: !IntOperand
+  { _returnLocation :: !Assembly.Operand
+  , _returnTypeSize :: !Assembly.Operand
   }
 
 -------------------------------------------------------------------------------
 
-indexLocation :: Index v -> Environment v -> PointerOperand
+indexLocation :: Index v -> Environment v -> Assembly.Operand
 indexLocation index env = do
   let
     var =
@@ -95,38 +89,27 @@ indexLocation index env = do
   fromMaybe (panic "CodeGeneration.indexLocation") $
     IntMap.lookup var $ _varLocations env
 
-globalLocation :: Name.Lifted -> PointerOperand
+globalLocation :: Name.Lifted -> Assembly.Operand
 globalLocation name =
-  PointerOperand $ Assembly.Global $ Assembly.Name name 0
+  Assembly.Global $ Assembly.Name name 0
 
-stackAllocate :: IntOperand -> Builder PointerOperand
+stackAllocate :: Assembly.Operand -> Builder Assembly.Operand
 stackAllocate size = do
-  stackPointer <- gets _stackPointer
-  stackPointerInt <- pointerToInt stackPointer
-  newStackPointerInt <- sub stackPointerInt size
-  newStackPointer <- intToPointer newStackPointerInt
-  modify $ \s -> s
-    { _stackPointer = newStackPointer
-    }
-  pure newStackPointer
+  return_ <- freshLocal
+  emit $ Assembly.StackAllocate return_ size
+  pure $ Assembly.LocalOperand return_
 
-stackDeallocate :: IntOperand -> Builder ()
-stackDeallocate size = do
-  stackPointer <- gets _stackPointer
-  stackPointerInt <- pointerToInt stackPointer
-  newStackPointerInt <- add stackPointerInt size
-  newStackPointer <- intToPointer newStackPointerInt
-  modify $ \s -> s
-    { _stackPointer = newStackPointer
-    }
+stackDeallocate :: Assembly.Operand -> Builder ()
+stackDeallocate size =
+  emit $ Assembly.StackDeallocate size
 
-heapAllocate :: IntOperand -> Builder PointerOperand
-heapAllocate (IntOperand size) = do
+heapAllocate :: Assembly.Operand -> Builder Assembly.Operand
+heapAllocate size = do
   return_ <- freshLocal
   emit $ Assembly.HeapAllocate return_ size
-  pure $ PointerOperand $ Assembly.LocalOperand return_
+  pure $ Assembly.LocalOperand return_
 
-typeOf :: Environment v -> Syntax.Term v -> Builder PointerOperand
+typeOf :: Environment v -> Syntax.Term v -> Builder Assembly.Operand
 typeOf env term = do
   type_ <- Builder $ lift $ do
     value <- Evaluation.evaluate (Context.toEnvironment $ _context env) term
@@ -143,7 +126,7 @@ typeOf env term = do
     }
   pure typeLocation
 
-sizeOfType :: PointerOperand -> Builder IntOperand
+sizeOfType :: Assembly.Operand -> Builder Assembly.Operand
 sizeOfType =
   load
 
@@ -154,47 +137,35 @@ freshLocal = do
   Var i <- Builder $ lift freshVar
   pure $ Assembly.Local i
 
-copy :: PointerOperand -> PointerOperand -> IntOperand -> Builder ()
-copy (PointerOperand destination) (PointerOperand source) (IntOperand size) =
+copy :: Assembly.Operand -> Assembly.Operand -> Assembly.Operand -> Builder ()
+copy destination source size =
   emit $ Assembly.Copy destination source size
 
-call :: Name.Lifted -> [PointerOperand] -> PointerOperand -> Builder ()
+call :: Name.Lifted -> [Assembly.Operand] -> Assembly.Operand -> Builder ()
 call global args returnLocation =
   emit $ Assembly.CallVoid (Assembly.Global $ Assembly.Name global 0) (coerce $ returnLocation : args)
 
-load :: PointerOperand -> Builder IntOperand
-load (PointerOperand pointer) = do
+load :: Assembly.Operand -> Builder Assembly.Operand
+load pointer = do
   destination <- freshLocal
   emit $ Assembly.Load destination pointer
-  pure $ IntOperand $ Assembly.LocalOperand destination
+  pure $ Assembly.LocalOperand destination
 
-store :: PointerOperand -> IntOperand -> Builder ()
-store (PointerOperand destination) (IntOperand int) =
+store :: Assembly.Operand -> Assembly.Operand -> Builder ()
+store destination int =
   emit $ Assembly.Store destination int
 
-add :: IntOperand -> IntOperand -> Builder IntOperand
-add (IntOperand i1) (IntOperand i2) = do
+add :: Assembly.Operand -> Assembly.Operand -> Builder Assembly.Operand
+add i1 i2 = do
   destination <- freshLocal
   emit $ Assembly.Add destination i1 i2
-  pure $ IntOperand $ Assembly.LocalOperand destination
+  pure $ Assembly.LocalOperand destination
 
-sub :: IntOperand -> IntOperand -> Builder IntOperand
-sub (IntOperand i1) (IntOperand i2) = do
+sub :: Assembly.Operand -> Assembly.Operand -> Builder Assembly.Operand
+sub i1 i2 = do
   destination <- freshLocal
   emit $ Assembly.Sub destination i1 i2
-  pure $ IntOperand $ Assembly.LocalOperand destination
-
-pointerToInt :: PointerOperand -> Builder IntOperand
-pointerToInt (PointerOperand pointer) = do
-  destination <- freshLocal
-  emit $ Assembly.PointerToInt destination pointer
-  pure $ IntOperand $ Assembly.LocalOperand destination
-
-intToPointer :: IntOperand -> Builder PointerOperand
-intToPointer (IntOperand integer) = do
-  destination <- freshLocal
-  emit $ Assembly.IntToPointer destination integer
-  pure $ PointerOperand $ Assembly.LocalOperand destination
+  pure $ Assembly.LocalOperand destination
 
 -------------------------------------------------------------------------------
 
@@ -202,26 +173,20 @@ pointerBytes :: Num a => a
 pointerBytes =
   8
 
-pointerBytesOperand :: IntOperand
+pointerBytesOperand :: Assembly.Operand
 pointerBytesOperand =
-  IntOperand $ Assembly.Lit $ Literal.Integer pointerBytes
+  Assembly.Lit $ Literal.Integer pointerBytes
 
 -------------------------------------------------------------------------------
 
 generateDefinition :: Name.Lifted -> Syntax.Definition -> M (Maybe (Assembly.Definition Assembly.BasicBlock))
 generateDefinition name@(Name.Lifted qualifiedName _) definition = do
-  Var i <- freshVar
-  let
-    stackPointerLocal
-      = Assembly.Local i
-    stackPointer =
-      PointerOperand $ Assembly.LocalOperand stackPointerLocal
   case definition of
     Syntax.TypeDeclaration _ ->
       pure Nothing
 
     Syntax.ConstantDefinition term -> do
-      ((), instructions) <- runBuilder stackPointer $ do
+      ((), instructions) <- runBuilder $ do
         let
           env =
             emptyEnvironment $ Scope.KeyedName Scope.Definition qualifiedName
@@ -232,19 +197,18 @@ generateDefinition name@(Name.Lifted qualifiedName _) definition = do
           { _returnLocation = termLocation
           , _returnTypeSize = typeSize
           }
-        termLocationInt <- pointerToInt termLocation
-        store (globalLocation name) termLocationInt
-      pure $ Just $ Assembly.ConstantDefinition stackPointerLocal instructions
+        store (globalLocation name) termLocation
+      pure $ Just $ Assembly.ConstantDefinition instructions
 
     Syntax.FunctionDefinition tele -> do
-      (args, instructions) <- runBuilder stackPointer $ do
+      (args, instructions) <- runBuilder $ do
         returnLocation <- freshLocal
         let
           env =
             emptyEnvironment $ Scope.KeyedName Scope.Definition qualifiedName
         args <- generateFunction env returnLocation tele
         return $ returnLocation : args
-      pure $ Just $ Assembly.FunctionDefinition stackPointerLocal args instructions
+      pure $ Just $ Assembly.FunctionDefinition args instructions
 
     Syntax.DataDefinition constrDefs ->
       panic "gd dd"
@@ -266,7 +230,7 @@ generateFunction env returnLocation tele =
       let
         return_ =
           Return
-            { _returnLocation = PointerOperand $ Assembly.LocalOperand returnLocation
+            { _returnLocation = Assembly.LocalOperand returnLocation
             , _returnTypeSize = typeSize
             }
       storeTerm env term return_
@@ -274,7 +238,7 @@ generateFunction env returnLocation tele =
 
     Telescope.Extend _name type_ _plicity tele' -> do
       termLocation <- freshLocal
-      env' <- extend env type_ $ PointerOperand $ Assembly.LocalOperand termLocation
+      env' <- extend env type_ $ Assembly.LocalOperand termLocation
       args <- generateFunction env' returnLocation tele'
       pure $ termLocation : args
 
@@ -334,9 +298,7 @@ storeTerm env term return_ =
             { _returnTypeSize = argTypeSize
             , _returnLocation = location
             }
-          locationInt <- pointerToInt location
-          newLocationInt <- add locationInt argTypeSize
-          intToPointer newLocationInt
+          add location argTypeSize
 
       boxity <- fetchBoxity typeName
       case boxity of
@@ -346,12 +308,11 @@ storeTerm env term return_ =
         Boxed -> do
           size <- boxedConstructorSize env con params
           heapLocation <- heapAllocate size
-          heapLocationInt <- pointerToInt heapLocation
           foldM_ go heapLocation tagArgs
-          store (_returnLocation return_) heapLocationInt
+          store (_returnLocation return_) heapLocation
 
     Syntax.Lit lit ->
-      store (_returnLocation return_) (IntOperand $ Assembly.Lit lit)
+      store (_returnLocation return_) (Assembly.Lit lit)
 
     Syntax.Let _name term' type_ body -> do
       typeLocation <- stackAllocate pointerBytesOperand
@@ -387,7 +348,7 @@ storeTerm env term return_ =
       call global (fst <$> args') $ _returnLocation return_
       forM_ args' $ stackDeallocate . snd
 
-    Syntax.Pi _ _ _ ->
+    Syntax.Pi {} ->
       store (_returnLocation return_) pointerBytesOperand
 
     Syntax.Closure global args ->
@@ -415,6 +376,6 @@ boxedConstructorSize
   :: Environment v
   -> Name.QualifiedConstructor
   -> [Syntax.Term v]
-  -> m IntOperand
+  -> m Assembly.Operand
 boxedConstructorSize =
   panic "bcs"
