@@ -105,11 +105,11 @@ popLocals =
   mapM_ pop . IntSet.toList
 
 stackAllocate :: Assembly.Local -> Assembly.Operand -> Converter ()
-stackAllocate destination size = do
+stackAllocate newStackPointerDestination size = do
   stackPointer <- gets _stackPointer
-  emitInstruction $ CPSAssembly.Sub destination (Assembly.LocalOperand stackPointer) size
+  emitInstruction $ CPSAssembly.Sub newStackPointerDestination (Assembly.LocalOperand stackPointer) size
   modify $ \s -> s
-    { _stackPointer = stackPointer
+    { _stackPointer = newStackPointerDestination
     }
 
 stackDeallocate :: Assembly.Operand -> Converter ()
@@ -159,7 +159,8 @@ convertBasicBlock liveLocals basicBlock =
     Assembly.Nil -> do
       continuation <- freshLocal
       pop continuation
-      terminate $ CPSAssembly.TailCall (Assembly.LocalOperand continuation) []
+      stackPointer <- gets _stackPointer
+      terminate $ CPSAssembly.TailCall (Assembly.LocalOperand continuation) [Assembly.LocalOperand stackPointer]
 
     Assembly.Cons _ instruction basicBlock' -> do
       convertInstruction (liveLocals <> Assembly.basicBlockOccurrences basicBlock') instruction
@@ -178,8 +179,8 @@ convertInstruction liveLocals instr =
       pushLocals liveLocals
       continuationFunctionName <- freshFunctionName
       push $ Assembly.Global continuationFunctionName
-      terminate $ CPSAssembly.TailCall function arguments
       stackPointer <- gets _stackPointer
+      terminate $ CPSAssembly.TailCall function $ Assembly.LocalOperand stackPointer : arguments
       startDefinition $ \basicBlock ->
         ( continuationFunctionName
         , Assembly.FunctionDefinition [stackPointer, result] basicBlock
@@ -190,8 +191,8 @@ convertInstruction liveLocals instr =
       pushLocals liveLocals
       continuationFunctionName <- freshFunctionName
       push $ Assembly.Global continuationFunctionName
-      terminate $ CPSAssembly.TailCall function arguments
       stackPointer <- gets _stackPointer
+      terminate $ CPSAssembly.TailCall function $ Assembly.LocalOperand stackPointer : arguments
       startDefinition $ \basicBlock ->
         ( continuationFunctionName
         , Assembly.FunctionDefinition [stackPointer] basicBlock
@@ -230,12 +231,13 @@ convertInstruction liveLocals instr =
           , locals
           , basicBlock
           )
+      stackPointer <- gets _stackPointer
       let
         branchTerminators =
           [ ( i
             , CPSAssembly.TailCall
               (Assembly.Global continuationFunctionName)
-              (Assembly.LocalOperand <$> locals)
+              (Assembly.LocalOperand <$> stackPointer : locals)
             )
           | (i, continuationFunctionName, locals, _) <- branches'
           ]
@@ -245,9 +247,8 @@ convertInstruction liveLocals instr =
       let defaultTerminator =
             CPSAssembly.TailCall
               (Assembly.Global defaultContinuationFunctionName)
-              (Assembly.LocalOperand <$> defaultLocals)
+              (Assembly.LocalOperand <$> stackPointer : defaultLocals)
       terminate $ CPSAssembly.Switch scrutinee branchTerminators defaultTerminator
-      stackPointer <- gets _stackPointer
       forM_ branches' $ \(_, continuationFunctionName, locals, basicBlock) -> do
         startDefinition $ \basicBlock' ->
           ( continuationFunctionName

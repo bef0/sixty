@@ -7,7 +7,6 @@ extra-deps:
 - dependent-hashmap-0.1.0.1
 - dependent-sum-0.7.1.0
 - dependent-sum-template-0.1.0.3
-- dependent-hashmap-0.1.0.1
 - llvm-hs-pretty-0.9.0.0
 - rock-0.3.0.0
 - git: https://github.com/fpco/ghc-prof-flamegraph.git

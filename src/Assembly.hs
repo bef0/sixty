@@ -110,7 +110,7 @@ instance Pretty basicBlock => Pretty (Instruction basicBlock) where
       Switch scrutinee branches default_ ->
         "switch" <+> pretty scrutinee <> line <>
           indent 2
-            (vcat
+            (vsep
               [ pretty i <+> "->" <> line <>
                 indent 2 (pretty basicBlock)
               | (i, basicBlock) <- branches
@@ -137,7 +137,7 @@ instance Pretty basicBlock => Pretty (Definition basicBlock) where
 
 instance Pretty BasicBlock where
   pretty (BasicBlock instrs) =
-    vcat $ pretty <$> instrs
+    vsep $ pretty <$> instrs
 
 -------------------------------------------------------------------------------
 
