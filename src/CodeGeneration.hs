@@ -113,18 +113,9 @@ typeOf :: Environment v -> Syntax.Term v -> Builder Assembly.Operand
 typeOf env term = do
   type_ <- Builder $ lift $ do
     value <- Evaluation.evaluate (Context.toEnvironment $ _context env) term
-    putText $ "typeOf " <> show term
     typeValue <- TypeOf.typeOf (_context env) value
-    putText "typeOf done"
-    result <- Readback.readback (Context.toEnvironment $ _context env) typeValue
-    putText "typeOf rb"
-    pure result
-  typeLocation <- stackAllocate pointerBytesOperand
-  storeTerm env type_ Return
-    { _returnLocation = typeLocation
-    , _returnTypeSize = pointerBytesOperand
-    }
-  pure typeLocation
+    Readback.readback (Context.toEnvironment $ _context env) typeValue
+  generateTypedTerm env type_ pointerBytesOperand
 
 sizeOfType :: Assembly.Operand -> Builder Assembly.Operand
 sizeOfType =
@@ -224,7 +215,6 @@ generateFunction
 generateFunction env returnLocation tele =
   case tele of
     Telescope.Empty term -> do
-      putText $ "gf typeOf " <> show term
       type_ <- typeOf env term
       typeSize <- sizeOfType type_
       let
@@ -246,7 +236,6 @@ generateFunction env returnLocation tele =
 
 generateTerm :: Environment v -> Syntax.Term v -> Builder Return
 generateTerm env term = do
-  putText $ "gt typeOf " <> show term
   type_ <- typeOf env term
   typeSize <- sizeOfType type_
   termLocation <- stackAllocate typeSize
@@ -258,6 +247,54 @@ generateTerm env term = do
         }
   storeTerm env term return_
   pure return_
+
+generateTypedTerm :: Environment v -> Syntax.Term v -> Assembly.Operand -> Builder Assembly.Operand
+generateTypedTerm env term typeSize = do
+  let
+    stackAllocateIt = do
+      termLocation <- stackAllocate typeSize
+      let
+        return_ =
+          Return
+            { _returnLocation = termLocation
+            , _returnTypeSize = typeSize
+            }
+      storeTerm env term return_
+      pure termLocation
+
+  case term of
+    Syntax.Var index ->
+      pure $ indexLocation index env
+
+    Syntax.Global global ->
+      pure $ globalLocation global
+
+    Syntax.Con {} ->
+      stackAllocateIt
+
+    Syntax.Lit {} ->
+      stackAllocateIt
+
+    Syntax.Let {} ->
+      stackAllocateIt
+
+    Syntax.Function _ ->
+      stackAllocateIt
+
+    Syntax.Apply {} ->
+      stackAllocateIt
+
+    Syntax.Pi {} ->
+      stackAllocateIt
+
+    Syntax.Closure {} ->
+      stackAllocateIt
+
+    Syntax.ApplyClosure {} ->
+      stackAllocateIt
+
+    Syntax.Case {} ->
+      stackAllocateIt
 
 storeTerm
   :: Environment v
@@ -290,8 +327,6 @@ storeTerm env term return_ =
               Syntax.Lit (Literal.Integer $ fromIntegral tag) : args
 
         go location arg = do
-          argReturn <- generateTerm env arg
-          putText $ "gt typeOf con " <> show arg
           argType <- typeOf env arg
           argTypeSize <- sizeOfType argType
           storeTerm env arg Return
@@ -321,12 +356,13 @@ storeTerm env term return_ =
         , _returnTypeSize = pointerBytesOperand
         }
       typeSize <- sizeOfType typeLocation
-      termLocation <- stackAllocate typeSize
-      storeTerm env term' Return
-        { _returnLocation = termLocation
-        , _returnTypeSize = typeSize
-        }
-      env' <- extend env type_ termLocation
+      -- termLocation <- stackAllocate typeSize
+      -- storeTerm env term' Return
+      --   { _returnLocation = termLocation
+      --   , _returnTypeSize = typeSize
+      --   }
+      term'' <- generateTypedTerm env term' typeSize
+      env' <- extend env type_ term''
       storeTerm env' body return_
       stackDeallocate typeSize
       stackDeallocate pointerBytesOperand
@@ -335,18 +371,8 @@ storeTerm env term return_ =
       store (_returnLocation return_) pointerBytesOperand
 
     Syntax.Apply global args -> do
-      args' <- forM args $ \arg -> do
-        putText $ "gt typeOf apply " <> show arg
-        type_ <- typeOf env arg
-        typeSize <- sizeOfType type_
-        argLocation <- stackAllocate typeSize
-        storeTerm env arg Return
-          { _returnLocation = argLocation
-          , _returnTypeSize = typeSize
-          }
-        pure (argLocation, typeSize)
-      call global (fst <$> args') $ _returnLocation return_
-      forM_ args' $ stackDeallocate . snd
+      args' <- forM args $ generateTerm env
+      call global (_returnLocation <$> args') $ _returnLocation return_
 
     Syntax.Pi {} ->
       store (_returnLocation return_) pointerBytesOperand

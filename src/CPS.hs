@@ -89,8 +89,8 @@ pop :: Assembly.Local -> Converter ()
 pop local = do
   stackPointer <- gets _stackPointer
   emitInstruction $
-    CPSAssembly.Store
-      (Assembly.LocalOperand local)
+    CPSAssembly.Load
+      local
       (Assembly.LocalOperand stackPointer)
   newStackPointer <- freshLocal
   emitInstruction $
@@ -150,8 +150,8 @@ convertDefinition fresh name definition =
           , _instructions = mempty
           , _stackPointer = stackPointer
           } $
-        unConverter $ do
-          convertBasicBlock (IntSet.fromList $ stackPointer : arguments) $ Assembly.basicBlockWithOccurrences basicBlock
+        unConverter $
+          convertBasicBlock mempty $ Assembly.basicBlockWithOccurrences basicBlock
 
 convertBasicBlock :: IntSet Assembly.Local -> Assembly.BasicBlockWithOccurrences -> Converter ()
 convertBasicBlock liveLocals basicBlock =

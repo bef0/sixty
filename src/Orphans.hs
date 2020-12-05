@@ -23,9 +23,6 @@ import qualified Data.IntervalMap.FingerTree as IntervalMap
 import Data.IntMap (IntMap)
 import qualified Data.IntMap as IntMap
 import Data.Persist
-import Data.Tsil (Tsil)
-import GHC.Exts (fromList)
-import qualified LLVM.AST as LLVM
 import qualified LLVM.AST
 import qualified LLVM.AST.AddrSpace
 import qualified LLVM.AST.CallingConvention
