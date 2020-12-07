@@ -99,6 +99,7 @@ pop local = do
       (Assembly.LocalOperand stackPointer)
       (Assembly.Lit $ Literal.Integer wordSize)
   modify $ \s -> s { _stackPointer = newStackPointer }
+  -- TODO write undefined
 
 popLocals :: IntSet Assembly.Local -> Converter ()
 popLocals =
@@ -161,6 +162,10 @@ convertBasicBlock liveLocals basicBlock =
       pop continuation
       stackPointer <- gets _stackPointer
       terminate $ CPSAssembly.TailCall (Assembly.LocalOperand continuation) [Assembly.LocalOperand stackPointer]
+
+    Assembly.Cons _ (Assembly.CallVoid function arguments) Assembly.Nil -> do
+      stackPointer <- gets _stackPointer
+      terminate $ CPSAssembly.TailCall function $ Assembly.LocalOperand stackPointer : arguments
 
     Assembly.Cons _ instruction basicBlock' -> do
       convertInstruction (liveLocals <> Assembly.basicBlockOccurrences basicBlock') instruction
