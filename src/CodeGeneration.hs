@@ -5,7 +5,6 @@ module CodeGeneration where
 
 import Protolude hiding (IntMap, typeOf)
 
-import Data.Coerce (coerce)
 import Rock
 
 import qualified Assembly
@@ -134,7 +133,7 @@ copy destination source size =
 
 call :: Name.Lifted -> [Assembly.Operand] -> Assembly.Operand -> Builder ()
 call global args returnLocation =
-  emit $ Assembly.CallVoid (Assembly.Global $ Assembly.Name global 0) (coerce $ returnLocation : args)
+  emit $ Assembly.CallVoid (Assembly.Global $ Assembly.Name global 0) (returnLocation : args)
 
 load :: Assembly.Operand -> Builder Assembly.Operand
 load pointer = do
@@ -275,8 +274,14 @@ generateTypedTerm env term type_ = do
     Syntax.Lit {} ->
       stackAllocateIt
 
-    Syntax.Let {} ->
-      stackAllocateIt
+    Syntax.Let _name term' termType body -> do
+      (termType', deallocateType) <- generateTypedTerm env termType pointerBytesOperand
+      (term'', deallocateTerm) <- generateTypedTerm env term' termType'
+      env' <- extend env termType term''
+      (result, deallocateBody) <- generateTypedTerm env' body type_
+      deallocateTerm
+      deallocateType
+      pure (result, deallocateBody >> deallocateTerm >> deallocateType)
 
     Syntax.Function _ ->
       stackAllocateIt
