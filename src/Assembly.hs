@@ -143,11 +143,11 @@ instance Pretty BasicBlock where
 
 data BasicBlockWithOccurrences
   = Nil
-  | Cons (IntSet Assembly.Local) (Assembly.Instruction BasicBlockWithOccurrences) BasicBlockWithOccurrences
+  | Cons (IntSet Assembly.Local, IntSet Assembly.Local) (Assembly.Instruction BasicBlockWithOccurrences) BasicBlockWithOccurrences
 
 cons :: Assembly.Instruction BasicBlockWithOccurrences -> BasicBlockWithOccurrences -> BasicBlockWithOccurrences
 cons instruction basicBlock =
-  Cons (instructionOccurrences instruction <> basicBlockOccurrences basicBlock) instruction basicBlock
+  Cons (instructionLocals instruction <> basicBlockLocals basicBlock ) instruction basicBlock
 
 basicBlockWithOccurrences :: Assembly.BasicBlock -> BasicBlockWithOccurrences
 basicBlockWithOccurrences (Assembly.BasicBlock instructions) =
@@ -161,55 +161,62 @@ basicBlockWithOccurrences (Assembly.BasicBlock instructions) =
         (basicBlockWithOccurrences $ Assembly.BasicBlock instructions')
 
 basicBlockOccurrences :: BasicBlockWithOccurrences -> IntSet Assembly.Local
-basicBlockOccurrences basicBlock =
+basicBlockOccurrences basicBlock = do
+  let
+    (bound, free) =
+      basicBlockLocals basicBlock
+  free `IntSet.difference` bound
+
+basicBlockLocals :: BasicBlockWithOccurrences -> (IntSet Assembly.Local, IntSet Assembly.Local)
+basicBlockLocals basicBlock =
   case basicBlock of
     Nil ->
       mempty
 
-    Cons occurrences _ _ ->
-      occurrences
+    Cons locals _ _ ->
+      locals
 
-instructionOccurrences :: Assembly.Instruction BasicBlockWithOccurrences -> IntSet Assembly.Local
-instructionOccurrences instruction =
+instructionLocals :: Assembly.Instruction BasicBlockWithOccurrences -> (IntSet Assembly.Local, IntSet Assembly.Local)
+instructionLocals instruction =
   case instruction of
     Assembly.Copy o1 o2 o3 ->
       operandOccurrences o1 <> operandOccurrences o2 <> operandOccurrences o3
 
     Assembly.Call l o os ->
-      IntSet.singleton l <> operandOccurrences o <> foldMap operandOccurrences os
+      (IntSet.singleton l, mempty) <> operandOccurrences o <> foldMap operandOccurrences os
 
     Assembly.CallVoid o os ->
       operandOccurrences o <> foldMap operandOccurrences os
 
     Assembly.Load l o ->
-      IntSet.singleton l <> operandOccurrences o
+      (IntSet.singleton l, mempty) <> operandOccurrences o
 
     Assembly.Store o1 o2 ->
       operandOccurrences o1 <> operandOccurrences o2
 
     Assembly.Add l o1 o2 ->
-      IntSet.singleton l <> operandOccurrences o1 <> operandOccurrences o2
+      (IntSet.singleton l, mempty) <> operandOccurrences o1 <> operandOccurrences o2
 
     Assembly.Sub l o1 o2 ->
-      IntSet.singleton l <> operandOccurrences o1 <> operandOccurrences o2
+      (IntSet.singleton l, mempty) <> operandOccurrences o1 <> operandOccurrences o2
 
     Assembly.StackAllocate l o ->
-      IntSet.singleton l <> operandOccurrences o
+      (IntSet.singleton l, mempty) <> operandOccurrences o
 
     Assembly.StackDeallocate o ->
       operandOccurrences o
 
     Assembly.HeapAllocate l o ->
-      IntSet.singleton l <> operandOccurrences o
+      (IntSet.singleton l, mempty) <> operandOccurrences o
 
     Assembly.Switch o brs d ->
-      operandOccurrences o <> foldMap (basicBlockOccurrences . snd) brs <> basicBlockOccurrences d
+      operandOccurrences o <> foldMap (basicBlockLocals . snd) brs <> basicBlockLocals d
 
-operandOccurrences :: Assembly.Operand -> IntSet Assembly.Local
+operandOccurrences :: Assembly.Operand -> (IntSet Assembly.Local, IntSet Assembly.Local)
 operandOccurrences operand =
   case operand of
     Assembly.LocalOperand local ->
-      IntSet.singleton local
+      (mempty, IntSet.singleton local)
 
     Assembly.Global _ ->
       mempty

@@ -3,7 +3,7 @@
 {-# language OverloadedStrings #-}
 {-# options_ghc -Wno-incomplete-record-updates #-}
 
-module Assembler where
+module OldAssembler where
 
 import Protolude hiding (IntSet, IntMap, local, state)
 
