@@ -30,7 +30,6 @@ import qualified ClosureConverted.Syntax
 import qualified ClosureConverted.TypeOf as ClosureConverted
 import qualified CodeGeneration
 import Core.Binding (Binding)
-import Core.Binding (Binding)
 import qualified Core.Evaluation as Evaluation
 import qualified Core.Syntax as Syntax
 import qualified CPS
@@ -526,8 +525,9 @@ rules sourceDirectories files readFile_ (Writer (Writer query)) =
 
     LLVM name ->
       noError $ do
-        maybeAssembly <- fetch $ Assembly name
-        pure $ Assembler.assembleDefinition name . fst <$> maybeAssembly
+        assemblyDefinitions <- fetch $ CPSAssembly name
+        forM assemblyDefinitions $ uncurry Assembler.assembleDefinition
+        -- pure $ Assembler.assembleDefinition name . fst <$> maybeAssembly
 
   where
     input :: Functor m => m a -> m ((a, TaskKind), [Error])

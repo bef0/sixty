@@ -79,7 +79,7 @@ data Query a where
 
   Assembly :: Name.Lifted -> Query (Maybe (Assembly.Definition Assembly.BasicBlock, Int))
   CPSAssembly :: Name.Lifted -> Query [(Assembly.Name, CPSAssembly.Definition)]
-  LLVM :: Name.Lifted -> Query (Maybe (LLVM.Name, [LLVM.Definition]))
+  LLVM :: Name.Lifted -> Query [LLVM.Definition]
 
 fetchImportedName
   :: MonadFetch Query m

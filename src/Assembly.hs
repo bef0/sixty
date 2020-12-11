@@ -19,7 +19,7 @@ newtype Local = Local Int
   deriving (Eq, Ord, Show, Generic, Persist, Hashable)
 
 data Name = Name !Name.Lifted !Int
-  deriving (Show, Generic, Persist, Hashable)
+  deriving (Eq, Show, Generic, Persist, Hashable)
 
 instance Pretty Name where
   pretty (Name name 0) =

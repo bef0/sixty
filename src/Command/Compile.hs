@@ -38,10 +38,10 @@ compile argumentFiles = do
         liftIO $ print cc
         assembly <- fetch $ Query.Assembly $ Name.Lifted name 0
         cpsAssembly <- fetch $ Query.CPSAssembly $ Name.Lifted name 0
-        -- llvm <- fetch $ Query.LLVM $ Name.Lifted name 0
+        llvm <- fetch $ Query.LLVM $ Name.Lifted name 0
         liftIO $ putDoc $ pretty assembly <> line
         liftIO $ putDoc $ pretty cpsAssembly <> line
-        -- liftIO $ putDoc $ pretty llvm
+        liftIO $ putDoc $ pretty llvm
         putText ""
   endTime <- getCurrentTime
   forM_ errs $ \err ->
