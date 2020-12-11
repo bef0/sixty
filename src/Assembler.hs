@@ -36,42 +36,8 @@ data OperandType
   | FunctionPointer !Int
   deriving (Eq, Show)
 
-cast :: OperandType -> (LLVM.Operand, OperandType) -> Assembler (LLVM.Operand, [LLVM.Named LLVM.Instruction])
-cast newType (operand, type_)
-  | type_ == newType =
-    pure (operand, [])
-
-  | otherwise = do
-    newOperand <- nextUnName
-    pure
-      ( LLVM.LocalReference (llvmType newType) newOperand
-      , pure $
-        newOperand LLVM.:=
-        case (type_, newType) of
-          (Word, _) ->
-            LLVM.IntToPtr
-              { operand0 = operand
-              , type' = llvmType newType
-              , metadata = mempty
-              }
-
-          (_, Word) ->
-            LLVM.PtrToInt
-              { operand0 = operand
-              , type' = llvmType newType
-              , metadata = mempty
-              }
-
-          _ ->
-            LLVM.BitCast
-              { operand0 = operand
-              , type' = llvmType newType
-              , metadata = mempty
-              }
-      )
-
 llvmType :: OperandType -> LLVM.Type
-llvmType type_ = 
+llvmType type_ =
   case type_ of
      Word ->
        wordSizedInt
@@ -80,11 +46,14 @@ llvmType type_ =
        wordPointer
 
      FunctionPointer numArgs ->
-      LLVM.FunctionType
-        { resultType = LLVM.VoidType
-        , argumentTypes = replicate numArgs wordPointer
-        , isVarArg = False
-        }
+       LLVM.Type.PointerType
+         { pointerReferent = LLVM.FunctionType
+           { resultType = LLVM.VoidType
+           , argumentTypes = replicate numArgs wordPointer
+           , isVarArg = False
+           }
+           , pointerAddrSpace = LLVM.AddrSpace 0
+         }
 
 alignment :: Num a => a
 alignment =
@@ -101,7 +70,7 @@ wordSizedInt =
 wordPointer :: LLVM.Type
 wordPointer =
   LLVM.Type.PointerType
-    { pointerReferent = LLVM.Type.i8
+    { pointerReferent = wordSizedInt
     , pointerAddrSpace = LLVM.AddrSpace 0
     }
 
@@ -176,20 +145,19 @@ assembleTerminator :: LLVM.Name -> [LLVM.Named LLVM.Instruction] -> CPSAssembly.
 assembleTerminator blockLabel instructions terminator =
   case terminator of
     CPSAssembly.Switch scrutinee branches defaultBranch -> do
-      scrutinee' <- assembleOperand scrutinee
+      (scrutinee', scrutineeInstructions) <- assembleOperand Word scrutinee
       branches' <- forM branches $ \(int, branchTerminator) -> do
         branchLabel <- nextUnName
         blocks <- assembleTerminator branchLabel [] branchTerminator
         pure (int, branchLabel, blocks)
       defaultLabel <- nextUnName
       defaultBlocks <- assembleTerminator defaultLabel [] defaultBranch
-      (scrutinee'', castInstructions) <- cast Word scrutinee'
       pure $
         [ LLVM.BasicBlock
           blockLabel
-          (castInstructions <> instructions)
+          (scrutineeInstructions <> instructions)
           (LLVM.Do LLVM.Switch
-            { operand0' = scrutinee''
+            { operand0' = scrutinee'
             , defaultDest = defaultLabel
             , dests = [(LLVM.Constant.Int wordBits $ fromIntegral int, label) | (int, label, _) <- branches']
             , metadata' = []
@@ -200,22 +168,20 @@ assembleTerminator blockLabel instructions terminator =
         <> defaultBlocks
 
     CPSAssembly.TailCall function arguments -> do
-      function' <- assembleOperand function
-      (function'', functionCastInstructions) <- cast (FunctionPointer $ length arguments) function'
-      arguments' <- mapM assembleOperand arguments
-      (arguments'', argumentCastInstructions) <- unzip <$> mapM (cast WordPointer) arguments'
+      (function', functionInstructions) <- assembleOperand (FunctionPointer $ length arguments) function
+      (arguments', argumentInstructions) <- unzip <$> mapM (assembleOperand WordPointer) arguments
       pure
         [ LLVM.BasicBlock
           blockLabel
           (instructions <>
-            functionCastInstructions <>
-            concat argumentCastInstructions <>
+            functionInstructions <>
+            concat argumentInstructions <>
             [ LLVM.Do LLVM.Call
               { tailCallKind = Just LLVM.MustTail
               , callingConvention = LLVM.CallingConvention.GHC
               , returnAttributes = []
-              , function = Right function''
-              , arguments = [(arg, []) | arg <- arguments'']
+              , function = Right function'
+              , arguments = [(arg, []) | arg <- arguments']
               , functionAttributes = []
               , metadata = []
               }
@@ -229,12 +195,9 @@ assembleInstruction instruction =
   -- TODO casts
   case instruction of
     CPSAssembly.Copy destination source size -> do
-      destination' <- assembleOperand destination
-      (destination'', destinationCastInstructions) <- cast WordPointer destination'
-      source' <- assembleOperand source
-      (source'', sourceCastInstructions) <- cast WordPointer source'
-      size' <- assembleOperand size
-      (size'', sizeCastInstructions) <- cast Word size'
+      (destination', destinationInstructions) <- assembleOperand WordPointer destination
+      (source', sourceInstructions) <- assembleOperand WordPointer source
+      (size', sizeInstructions) <- assembleOperand WordPointer size
       let
         memcpyGlobal =
           LLVM.Constant.GlobalReference
@@ -251,16 +214,16 @@ assembleInstruction instruction =
               }
             (LLVM.Name $ "llvm.memcpy.p0i8.p0i8.i" <> fromString (show (wordBits :: Int)))
         arguments =
-          [ destination''
-          , source''
-          , size''
+          [ destination'
+          , source'
+          , size'
           , LLVM.ConstantOperand $ LLVM.Constant.Int 32 alignment
           , LLVM.ConstantOperand $ LLVM.Constant.Int 1 0 -- isvolatile
           ]
       pure $
-        destinationCastInstructions <>
-        sourceCastInstructions <>
-        sizeCastInstructions <>
+        destinationInstructions <>
+        sourceInstructions <>
+        sizeInstructions <>
         [ LLVM.Do
           LLVM.Call
             { tailCallKind = Nothing
@@ -275,14 +238,13 @@ assembleInstruction instruction =
 
     CPSAssembly.Load destination address -> do
       destination' <- activateLocal Word destination
-      address' <- assembleOperand address
-      (address'', addressCastInstructions) <- cast WordPointer address'
+      (address', addressInstructions) <- assembleOperand WordPointer address
       pure $
-        addressCastInstructions <>
+        addressInstructions <>
         [ destination' LLVM.:=
           LLVM.Load
             { volatile = False
-            , address = address''
+            , address = address'
             , maybeAtomicity = Nothing
             , alignment = alignment
             , metadata = []
@@ -290,18 +252,16 @@ assembleInstruction instruction =
         ]
 
     CPSAssembly.Store address value -> do
-      address' <- assembleOperand address
-      (adress'', addressCastInstructions) <- cast WordPointer address'
-      value' <- assembleOperand value
-      (value'', valueCastInstructions) <- cast WordPointer value'
+      (address', addressInstructions) <- assembleOperand WordPointer address
+      (value', valueInstructions) <- assembleOperand Word value
       pure $
-        addressCastInstructions <>
-        valueCastInstructions <>
+        addressInstructions <>
+        valueInstructions <>
         [ LLVM.Do
           LLVM.Store
             { volatile = False
-            , address = adress''
-            , value = value''
+            , address = address'
+            , value = value'
             , maybeAtomicity = Nothing
             , alignment = alignment
             , metadata = []
@@ -310,38 +270,34 @@ assembleInstruction instruction =
 
     CPSAssembly.Add destination operand1 operand2 -> do
       destination' <- activateLocal Word destination
-      operand1' <- assembleOperand operand1
-      (operand1'', operand1CastInstructions) <- cast Word operand1'
-      operand2' <- assembleOperand operand2
-      (operand2'', operand2CastInstructions) <- cast Word operand2'
+      (operand1', operand1Instructions) <- assembleOperand Word operand1
+      (operand2', operand2Instructions) <- assembleOperand Word operand2
       pure $
-        operand1CastInstructions <>
-        operand2CastInstructions <>
+        operand1Instructions <>
+        operand2Instructions <>
         [ destination' LLVM.:=
           LLVM.Add
             { nsw = False
             , nuw = False
-            , operand0 = operand1''
-            , operand1 = operand2''
+            , operand0 = operand1'
+            , operand1 = operand2'
             , metadata = []
             }
         ]
 
     CPSAssembly.Sub destination operand1 operand2 -> do
       destination' <- activateLocal Word destination
-      operand1' <- assembleOperand operand1
-      (operand1'', operand1CastInstructions) <- cast Word operand1'
-      operand2' <- assembleOperand operand2
-      (operand2'', operand2CastInstructions) <- cast Word operand2'
+      (operand1', operand1Instructions) <- assembleOperand Word operand1
+      (operand2', operand2Instructions) <- assembleOperand Word operand2
       pure $
-        operand1CastInstructions <>
-        operand2CastInstructions <>
+        operand1Instructions <>
+        operand2Instructions <>
         [ destination' LLVM.:=
           LLVM.Sub
             { nsw = False
             , nuw = False
-            , operand0 = operand1''
-            , operand1 = operand2''
+            , operand0 = operand1'
+            , operand1 = operand2'
             , metadata = []
             }
         ]
@@ -349,12 +305,12 @@ assembleInstruction instruction =
     CPSAssembly.HeapAllocate {} ->
       panic "Assember: HeapAllocate" -- TODO
 
-assembleOperand :: Assembly.Operand -> Assembler (LLVM.Operand, OperandType)
-assembleOperand operand =
+assembleOperand :: OperandType -> Assembly.Operand -> Assembler (LLVM.Operand, [LLVM.Named LLVM.Instruction])
+assembleOperand type_ operand =
   case operand of
     Assembly.LocalOperand local -> do
       locals <- gets _locals
-      pure $ IntMap.lookupDefault (panic "assembleOperand: no such local") local locals
+      cast type_ $ IntMap.lookupDefault (panic "assembleOperand: no such local") local locals
 
     Assembly.Global global@(Assembly.Name liftedName _) -> do
       definitions <- fetch $ Query.CPSAssembly liftedName
@@ -364,21 +320,55 @@ assembleOperand operand =
 
         Just definition -> do
           let
-            type_ =
+            defType =
               definitionType definition
-          pure
+          cast type_
             ( LLVM.ConstantOperand $
-              LLVM.Constant.GlobalReference (llvmType type_) $ assembleName global
-            , type_
+              LLVM.Constant.GlobalReference (llvmType defType) $ assembleName global
+            , defType
             )
 
     Assembly.Lit lit ->
       case lit of
         Literal.Integer int ->
-          pure
+          cast type_
             ( LLVM.ConstantOperand LLVM.Constant.Int
               { integerBits = wordBits
               , integerValue = int
               }
             , Word
             )
+
+cast :: OperandType -> (LLVM.Operand, OperandType) -> Assembler (LLVM.Operand, [LLVM.Named LLVM.Instruction])
+cast newType (operand, type_)
+  | type_ == newType =
+    pure (operand, [])
+
+  | otherwise = do
+    newOperand <- nextUnName
+    pure
+      ( LLVM.LocalReference (llvmType newType) newOperand
+      , pure $
+        newOperand LLVM.:=
+        case (type_, newType) of
+          (Word, _) ->
+            LLVM.IntToPtr
+              { operand0 = operand
+              , type' = llvmType newType
+              , metadata = mempty
+              }
+
+          (_, Word) ->
+            LLVM.PtrToInt
+              { operand0 = operand
+              , type' = llvmType newType
+              , metadata = mempty
+              }
+
+          _ ->
+            LLVM.BitCast
+              { operand0 = operand
+              , type' = llvmType newType
+              , metadata = mempty
+              }
+      )
