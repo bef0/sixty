@@ -12,6 +12,7 @@ extra-source-files:
 - README.md
 data-files:
 - builtin/Builtin.vix
+- rts/forward_declarations.ll
 
 ghc-options:
   - -Wall

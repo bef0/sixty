@@ -74,6 +74,13 @@ wordPointer =
     , pointerAddrSpace = LLVM.AddrSpace 0
     }
 
+bytePointer :: LLVM.Type
+bytePointer =
+  LLVM.Type.PointerType
+    { pointerReferent = LLVM.Type.IntegerType 8
+    , pointerAddrSpace = LLVM.AddrSpace 0
+    }
+
 nextUnName :: Assembler LLVM.Name
 nextUnName = do
   name <- gets _nextUnName
@@ -177,7 +184,7 @@ assembleTerminator blockLabel instructions terminator =
             functionInstructions <>
             concat argumentInstructions <>
             [ LLVM.Do LLVM.Call
-              { tailCallKind = Just LLVM.MustTail
+              { tailCallKind = Just LLVM.Tail
               , callingConvention = LLVM.CallingConvention.GHC
               , returnAttributes = []
               , function = Right function'
@@ -187,25 +194,26 @@ assembleTerminator blockLabel instructions terminator =
               }
             ]
           )
-          (LLVM.Do LLVM.Unreachable { metadata' = mempty })
+          (LLVM.Do LLVM.Ret { returnOperand = Nothing, metadata' = mempty })
         ]
 
 assembleInstruction :: CPSAssembly.Instruction -> Assembler [LLVM.Named LLVM.Instruction]
 assembleInstruction instruction =
-  -- TODO casts
   case instruction of
     CPSAssembly.Copy destination source size -> do
       (destination', destinationInstructions) <- assembleOperand WordPointer destination
       (source', sourceInstructions) <- assembleOperand WordPointer source
-      (size', sizeInstructions) <- assembleOperand WordPointer size
+      (size', sizeInstructions) <- assembleOperand Word size
+      destination'' <- nextUnName
+      source'' <- nextUnName
       let
         memcpyGlobal =
           LLVM.Constant.GlobalReference
             LLVM.FunctionType
               { LLVM.resultType = LLVM.Type.void
               , LLVM.argumentTypes =
-                  [ wordPointer
-                  , wordPointer
+                  [ bytePointer
+                  , bytePointer
                   , wordSizedInt
                   , LLVM.Type.i32
                   , LLVM.Type.i1
@@ -214,8 +222,8 @@ assembleInstruction instruction =
               }
             (LLVM.Name $ "llvm.memcpy.p0i8.p0i8.i" <> fromString (show (wordBits :: Int)))
         arguments =
-          [ destination'
-          , source'
+          [ LLVM.LocalReference bytePointer destination''
+          , LLVM.LocalReference bytePointer source''
           , size'
           , LLVM.ConstantOperand $ LLVM.Constant.Int 32 alignment
           , LLVM.ConstantOperand $ LLVM.Constant.Int 1 0 -- isvolatile
@@ -224,7 +232,19 @@ assembleInstruction instruction =
         destinationInstructions <>
         sourceInstructions <>
         sizeInstructions <>
-        [ LLVM.Do
+        [ destination'' LLVM.:=
+            LLVM.BitCast
+              { operand0 = destination'
+              , type' = bytePointer
+              , metadata = mempty
+              }
+        , source'' LLVM.:=
+            LLVM.BitCast
+              { operand0 = source'
+              , type' = bytePointer
+              , metadata = mempty
+              }
+        , LLVM.Do
           LLVM.Call
             { tailCallKind = Nothing
             , callingConvention = LLVM.CallingConvention.C
@@ -237,8 +257,8 @@ assembleInstruction instruction =
         ]
 
     CPSAssembly.Load destination address -> do
-      destination' <- activateLocal Word destination
       (address', addressInstructions) <- assembleOperand WordPointer address
+      destination' <- activateLocal Word destination
       pure $
         addressInstructions <>
         [ destination' LLVM.:=
@@ -269,9 +289,9 @@ assembleInstruction instruction =
         ]
 
     CPSAssembly.Add destination operand1 operand2 -> do
-      destination' <- activateLocal Word destination
       (operand1', operand1Instructions) <- assembleOperand Word operand1
       (operand2', operand2Instructions) <- assembleOperand Word operand2
+      destination' <- activateLocal Word destination
       pure $
         operand1Instructions <>
         operand2Instructions <>
@@ -286,9 +306,9 @@ assembleInstruction instruction =
         ]
 
     CPSAssembly.Sub destination operand1 operand2 -> do
-      destination' <- activateLocal Word destination
       (operand1', operand1Instructions) <- assembleOperand Word operand1
       (operand2', operand2Instructions) <- assembleOperand Word operand2
+      destination' <- activateLocal Word destination
       pure $
         operand1Instructions <>
         operand2Instructions <>
