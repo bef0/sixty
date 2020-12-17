@@ -22,12 +22,15 @@ import Data.IntervalMap.FingerTree (IntervalMap)
 import qualified Data.IntervalMap.FingerTree as IntervalMap
 import Data.IntMap (IntMap)
 import qualified Data.IntMap as IntMap
+import qualified Data.Map as Map
 import Data.Persist
+import qualified Data.Set as Set
 import qualified LLVM.AST
 import qualified LLVM.AST.AddrSpace
 import qualified LLVM.AST.CallingConvention
 import qualified LLVM.AST.COMDAT
 import qualified LLVM.AST.Constant
+import qualified LLVM.AST.DataLayout
 import qualified LLVM.AST.DLL
 import qualified LLVM.AST.Float
 import qualified LLVM.AST.FloatingPointPredicate
@@ -125,12 +128,23 @@ instance Persist a => Persist (Const a b) where
   get =
     Const <$> get
 
+instance (Hashable k, Hashable v) => Hashable (Map k v) where
+  hashWithSalt s = hashWithSalt s . Map.toList
+
+instance (Hashable k) => Hashable (Set k) where
+  hashWithSalt s = hashWithSalt s . Set.toList
+
 deriving instance Hashable LLVM.AST.AddrSpace.AddrSpace
 deriving instance Hashable LLVM.AST.BasicBlock
 deriving instance Hashable LLVM.AST.COMDAT.SelectionKind
 deriving instance Hashable LLVM.AST.CallingConvention.CallingConvention
 deriving instance Hashable LLVM.AST.Constant.Constant
 deriving instance Hashable LLVM.AST.DLL.StorageClass
+deriving instance Hashable LLVM.AST.DataLayout.AlignType
+deriving instance Hashable LLVM.AST.DataLayout.AlignmentInfo
+deriving instance Hashable LLVM.AST.DataLayout.DataLayout
+deriving instance Hashable LLVM.AST.DataLayout.Endianness
+deriving instance Hashable LLVM.AST.DataLayout.Mangling
 deriving instance Hashable LLVM.AST.Definition
 deriving instance Hashable LLVM.AST.FastMathFlags
 deriving instance Hashable LLVM.AST.Float.SomeFloat
@@ -149,6 +163,7 @@ deriving instance Hashable LLVM.AST.MDNode
 deriving instance Hashable LLVM.AST.MemoryOrdering
 deriving instance Hashable LLVM.AST.Metadata
 deriving instance Hashable LLVM.AST.MetadataNodeID
+deriving instance Hashable LLVM.AST.Module
 deriving instance Hashable LLVM.AST.Name
 deriving instance Hashable LLVM.AST.Operand.BasicTypeTag
 deriving instance Hashable LLVM.AST.Operand.ChecksumInfo
@@ -212,6 +227,11 @@ deriving instance Persist LLVM.AST.COMDAT.SelectionKind
 deriving instance Persist LLVM.AST.CallingConvention.CallingConvention
 deriving instance Persist LLVM.AST.Constant.Constant
 deriving instance Persist LLVM.AST.DLL.StorageClass
+deriving instance Persist LLVM.AST.DataLayout.AlignType
+deriving instance Persist LLVM.AST.DataLayout.AlignmentInfo
+deriving instance Persist LLVM.AST.DataLayout.DataLayout
+deriving instance Persist LLVM.AST.DataLayout.Endianness
+deriving instance Persist LLVM.AST.DataLayout.Mangling
 deriving instance Persist LLVM.AST.Definition
 deriving instance Persist LLVM.AST.FastMathFlags
 deriving instance Persist LLVM.AST.Float.SomeFloat
@@ -230,6 +250,7 @@ deriving instance Persist LLVM.AST.MDNode
 deriving instance Persist LLVM.AST.MemoryOrdering
 deriving instance Persist LLVM.AST.Metadata
 deriving instance Persist LLVM.AST.MetadataNodeID
+deriving instance Persist LLVM.AST.Module
 deriving instance Persist LLVM.AST.Name
 deriving instance Persist LLVM.AST.Operand.BasicTypeTag
 deriving instance Persist LLVM.AST.Operand.ChecksumInfo

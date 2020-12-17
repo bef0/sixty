@@ -5,25 +5,24 @@ module Assembler where
 
 import qualified Assembly
 import qualified CPSAssembly
+import Data.ByteString.Short (ShortByteString)
 import qualified Data.ByteString.Short as ShortByteString
 import Data.IntMap (IntMap)
 import qualified Data.IntMap as IntMap
-import qualified Data.List as List
 import Data.String (fromString)
+import Data.Text.Prettyprint.Doc
 import qualified Literal
 import qualified LLVM.AST as LLVM
-import qualified LLVM.AST.AddrSpace as LLVM
+import qualified LLVM.AST.Linkage as LLVM
+import qualified CPS
 import qualified LLVM.AST.CallingConvention as LLVM.CallingConvention
 import qualified LLVM.AST.Constant as LLVM.Constant
 import qualified LLVM.AST.Global as LLVM.Global
 import qualified LLVM.AST.Type as LLVM.Type
 import qualified Name
 import Protolude hiding (IntMap, cast, local, moduleName)
-import Query (Query)
-import qualified Query
-import Rock
 
-type Assembler = StateT AssemblerState (Task Query)
+type Assembler = State AssemblerState
 
 data AssemblerState = AssemblerState
   { _locals :: IntMap Assembly.Local (LLVM.Operand, OperandType)
@@ -46,17 +45,18 @@ llvmType type_ =
        wordPointer
 
      FunctionPointer numArgs ->
-       LLVM.Type.PointerType
-         { pointerReferent = LLVM.FunctionType
-           { resultType = LLVM.VoidType
-           , argumentTypes = replicate numArgs wordPointer
-           , isVarArg = False
-           }
-           , pointerAddrSpace = LLVM.AddrSpace 0
+       LLVM.Type.ptr LLVM.FunctionType
+         { resultType = LLVM.VoidType
+         , argumentTypes = replicate numArgs wordPointer
+         , isVarArg = False
          }
 
 alignment :: Num a => a
 alignment =
+  8
+
+wordBytes :: Num a => a
+wordBytes =
   8
 
 wordBits :: Num a => a
@@ -69,17 +69,11 @@ wordSizedInt =
 
 wordPointer :: LLVM.Type
 wordPointer =
-  LLVM.Type.PointerType
-    { pointerReferent = wordSizedInt
-    , pointerAddrSpace = LLVM.AddrSpace 0
-    }
+  LLVM.Type.ptr wordSizedInt
 
 bytePointer :: LLVM.Type
 bytePointer =
-  LLVM.Type.PointerType
-    { pointerReferent = LLVM.Type.IntegerType 8
-    , pointerAddrSpace = LLVM.AddrSpace 0
-    }
+  LLVM.Type.ptr LLVM.Type.i8
 
 nextUnName :: Assembler LLVM.Name
 nextUnName = do
@@ -97,50 +91,77 @@ activateLocal type_ local = do
     }
   pure name
 
-assembleName :: Assembly.Name -> LLVM.Name
+-------------------------------------------------------------------------------
+
+assembleModule :: Name.Module -> [(Assembly.Name, CPSAssembly.Definition)] -> LLVM.Module
+assembleModule (Name.Module moduleNameText) definitions = do
+  let
+    assembledDefinitions =
+      foreach definitions $ uncurry assembleDefinition
+  LLVM.Module
+    { moduleName = ShortByteString.toShort $ toUtf8 moduleNameText
+    , moduleSourceFileName = ""
+    , moduleDataLayout = Nothing
+    , moduleTargetTriple = Nothing
+    , moduleDefinitions = concat assembledDefinitions
+    }
+
+assembleDefinition :: Assembly.Name -> CPSAssembly.Definition -> [LLVM.Definition]
+assembleDefinition name definition =
+  flip evalState AssemblerState
+    { _locals = mempty
+    , _nextUnName = 0
+    } $
+    case definition of
+     Assembly.ConstantDefinition stackPointer basicBlock -> do
+       stackPointer' <- activateLocal WordPointer stackPointer
+       basicBlocks <- assembleBasicBlock basicBlock
+       pure
+        [ LLVM.GlobalDefinition
+          LLVM.globalVariableDefaults
+          { LLVM.Global.name = LLVM.Name $ assembleName name
+          , LLVM.Global.unnamedAddr = Just LLVM.GlobalAddr
+          , LLVM.Global.type' = wordPointer
+          , LLVM.Global.initializer = Just LLVM.Constant.Undef { constantType = wordPointer }
+          }
+        , LLVM.GlobalDefinition
+          LLVM.Global.functionDefaults
+            { LLVM.Global.callingConvention = LLVM.CallingConvention.GHC
+            , LLVM.Global.returnType = LLVM.VoidType
+            , LLVM.Global.name = LLVM.Name $ assembleName $ CPS.initDefinitionName name
+            , LLVM.Global.parameters = ([LLVM.Parameter wordPointer stackPointer' []], False)
+            , LLVM.Global.alignment = alignment
+            , LLVM.Global.basicBlocks = basicBlocks
+            , LLVM.Global.linkage = LLVM.Private
+            }
+        ]
+
+     Assembly.FunctionDefinition parameters basicBlock -> do
+       parameters' <- mapM (activateLocal WordPointer) parameters
+       basicBlocks <- assembleBasicBlock basicBlock
+       pure
+         [ LLVM.GlobalDefinition
+           LLVM.Global.functionDefaults
+           { LLVM.Global.callingConvention = LLVM.CallingConvention.GHC
+           , LLVM.Global.returnType = LLVM.VoidType
+           , LLVM.Global.name = LLVM.Name $ assembleName name
+           , LLVM.Global.parameters = ([LLVM.Parameter wordPointer parameter [] | parameter <- parameters'], False)
+           , LLVM.Global.alignment = alignment
+           , LLVM.Global.basicBlocks = basicBlocks
+           }
+         ]
+
+assembleName :: Assembly.Name -> ShortByteString
 assembleName name =
   case name of
     Assembly.Name (Name.Lifted (Name.Qualified (Name.Module moduleName) (Name.Name name_)) 0) 0 ->
-      LLVM.Name $ ShortByteString.toShort $ toUtf8 $ moduleName <> "." <> name_
+      ShortByteString.toShort $ toUtf8 $ moduleName <> "." <> name_
 
     Assembly.Name (Name.Lifted (Name.Qualified (Name.Module moduleName) (Name.Name name_)) 0) j ->
-      LLVM.Name $ ShortByteString.toShort $ toUtf8 $ moduleName <> "." <> name_ <> "$" <> show j
+      ShortByteString.toShort $ toUtf8 $ moduleName <> "." <> name_ <> "$" <> show j
 
     Assembly.Name (Name.Lifted (Name.Qualified (Name.Module moduleName) (Name.Name name_)) i) j ->
-      LLVM.Name $ ShortByteString.toShort $ toUtf8 $ moduleName <> "." <> name_ <> "$" <> show i <> "$" <> show j
-
-definitionType :: CPSAssembly.Definition -> OperandType
-definitionType definition =
-  case definition of
-    Assembly.ConstantDefinition {} ->
-      WordPointer
-
-    Assembly.FunctionDefinition parameters _ ->
-      FunctionPointer $ length parameters
-
-assembleDefinition :: Assembly.Name -> CPSAssembly.Definition -> Task Query LLVM.Definition
-assembleDefinition name definition =
-  case definition of
-   Assembly.ConstantDefinition {} ->
-     panic "Assembler: ConstantDefinition" -- TODO
-
-   Assembly.FunctionDefinition parameters basicBlock ->
-     flip evalStateT AssemblerState
-      { _locals = mempty
-      , _nextUnName = 0
-      } $ do
-       parameters' <- mapM (activateLocal WordPointer) parameters
-       basicBlocks <- assembleBasicBlock basicBlock
-       pure $
-        LLVM.GlobalDefinition
-        LLVM.Global.functionDefaults
-          { LLVM.Global.callingConvention = LLVM.CallingConvention.GHC
-          , LLVM.Global.returnType = LLVM.VoidType
-          , LLVM.Global.name = assembleName name
-          , LLVM.Global.parameters = ([LLVM.Parameter wordPointer parameter [] | parameter <- parameters'], False)
-          , LLVM.Global.alignment = alignment
-          , LLVM.Global.basicBlocks = basicBlocks
-          }
+      ShortByteString.toShort $ toUtf8 $ moduleName <> "." <> name_ <> "$" <> show i <> "$" <> show j
 
 assembleBasicBlock :: CPSAssembly.BasicBlock -> Assembler [LLVM.BasicBlock]
 assembleBasicBlock (CPSAssembly.BasicBlock instructions terminator) = do
@@ -288,6 +309,25 @@ assembleInstruction instruction =
             }
         ]
 
+    CPSAssembly.InitGlobal global value -> do
+      (value', valueInstructions) <- assembleOperand WordPointer value
+      pure $
+        valueInstructions <>
+        [ LLVM.Do
+          LLVM.Store
+            { volatile = False
+            , address =
+              LLVM.ConstantOperand $
+              LLVM.Constant.GlobalReference
+                (LLVM.Type.ptr $ llvmType WordPointer)
+                (LLVM.Name $ assembleName $ Assembly.Name global 0)
+            , value = value'
+            , maybeAtomicity = Nothing
+            , alignment = alignment
+            , metadata = []
+            }
+        ]
+
     CPSAssembly.Add destination operand1 operand2 -> do
       (operand1', operand1Instructions) <- assembleOperand Word operand1
       (operand2', operand2Instructions) <- assembleOperand Word operand2
@@ -332,21 +372,35 @@ assembleOperand type_ operand =
       locals <- gets _locals
       cast type_ $ IntMap.lookupDefault (panic "assembleOperand: no such local") local locals
 
-    Assembly.Global global@(Assembly.Name liftedName _) -> do
-      definitions <- fetch $ Query.CPSAssembly liftedName
-      case List.lookup global definitions of -- TODO don't use list lookup
-        Nothing ->
-          panic "assembleOperand: No such global"
+    Assembly.GlobalConstant global -> do
+      destination <- nextUnName
+      (castDestination, castInstructions) <- cast type_ (LLVM.LocalReference (llvmType WordPointer) destination, WordPointer)
+      pure
+        ( castDestination
+        , destination LLVM.:=
+          LLVM.Load
+            { volatile = False
+            , address =
+              LLVM.ConstantOperand $
+              LLVM.Constant.GlobalReference
+                (LLVM.Type.ptr $ llvmType WordPointer)
+                (LLVM.Name $ assembleName global)
+            , maybeAtomicity = Nothing
+            , alignment = alignment
+            , metadata = []
+            }
+          : castInstructions
+        )
 
-        Just definition -> do
-          let
-            defType =
-              definitionType definition
-          cast type_
-            ( LLVM.ConstantOperand $
-              LLVM.Constant.GlobalReference (llvmType defType) $ assembleName global
-            , defType
-            )
+    Assembly.GlobalFunction global arity -> do
+      let
+        defType =
+          FunctionPointer $ 1 + arity
+      cast type_
+        ( LLVM.ConstantOperand $
+          LLVM.Constant.GlobalReference (llvmType defType) $ LLVM.Name $ assembleName global
+        , defType
+        )
 
     Assembly.Lit lit ->
       case lit of

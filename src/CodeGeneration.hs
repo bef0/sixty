@@ -88,9 +88,9 @@ indexLocation index env = do
   fromMaybe (panic "CodeGeneration.indexLocation") $
     IntMap.lookup var $ _varLocations env
 
-globalLocation :: Name.Lifted -> Assembly.Operand
-globalLocation name =
-  Assembly.Global $ Assembly.Name name 0
+globalConstantLocation :: Name.Lifted -> Assembly.Operand
+globalConstantLocation name =
+  Assembly.GlobalConstant $ Assembly.Name name 0
 
 stackAllocate :: Assembly.Operand -> Builder Assembly.Operand
 stackAllocate size = do
@@ -133,7 +133,7 @@ copy destination source size =
 
 call :: Name.Lifted -> [Assembly.Operand] -> Assembly.Operand -> Builder ()
 call global args returnLocation =
-  emit $ Assembly.CallVoid (Assembly.Global $ Assembly.Name global 0) (returnLocation : args)
+  emit $ Assembly.CallVoid (Assembly.GlobalFunction (Assembly.Name global 0) $ 1 + length args) (returnLocation : args)
 
 load :: Assembly.Operand -> Builder Assembly.Operand
 load pointer = do
@@ -142,8 +142,12 @@ load pointer = do
   pure $ Assembly.LocalOperand destination
 
 store :: Assembly.Operand -> Assembly.Operand -> Builder ()
-store destination int =
-  emit $ Assembly.Store destination int
+store destination value =
+  emit $ Assembly.Store destination value
+
+initGlobal :: Name.Lifted -> Assembly.Operand -> Builder ()
+initGlobal global value =
+  emit $ Assembly.InitGlobal global value
 
 add :: Assembly.Operand -> Assembly.Operand -> Builder Assembly.Operand
 add i1 i2 = do
@@ -169,7 +173,7 @@ pointerBytesOperand =
 
 -------------------------------------------------------------------------------
 
-generateDefinition :: Name.Lifted -> Syntax.Definition -> M (Maybe (Assembly.Definition Assembly.BasicBlock))
+generateDefinition :: Name.Lifted -> Syntax.Definition -> M (Maybe (Assembly.Definition () Assembly.BasicBlock))
 generateDefinition name@(Name.Lifted qualifiedName _) definition = do
   case definition of
     Syntax.TypeDeclaration _ ->
@@ -182,14 +186,14 @@ generateDefinition name@(Name.Lifted qualifiedName _) definition = do
             emptyEnvironment $ Scope.KeyedName Scope.Definition qualifiedName
         (type_, deallocateType) <- typeOf env term
         typeSize <- sizeOfType type_
-        termLocation <- heapAllocate typeSize
+        deallocateType
+        termLocation <- stackAllocate typeSize
         storeTerm env term Return
           { _returnLocation = termLocation
           , _returnType = type_
           }
-        deallocateType
-        store (globalLocation name) termLocation
-      pure $ Just $ Assembly.ConstantDefinition instructions
+        initGlobal name termLocation
+      pure $ Just $ Assembly.ConstantDefinition () instructions
 
     Syntax.FunctionDefinition tele -> do
       (args, instructions) <- runBuilder $ do
@@ -266,7 +270,7 @@ generateTypedTerm env term type_ = do
       pure (indexLocation index env, pure ())
 
     Syntax.Global global ->
-      pure (globalLocation global, pure ())
+      pure (globalConstantLocation global, pure ())
 
     Syntax.Con {} ->
       stackAllocateIt
@@ -318,7 +322,7 @@ storeTerm env term return_ =
     Syntax.Global global -> do
       let
         location =
-          globalLocation global
+          globalConstantLocation global
       returnTypeSize <- sizeOfType $ _returnType return_
       copy (_returnLocation return_) location returnTypeSize
 

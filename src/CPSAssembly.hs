@@ -7,12 +7,14 @@ import Assembly (Local, Operand)
 import qualified Assembly 
 import Data.Persist
 import Data.Text.Prettyprint.Doc
+import qualified Name
 import Protolude
 
 data Instruction
   = Copy !Operand !Operand !Operand
   | Load !Local !Operand
   | Store !Operand !Operand
+  | InitGlobal !Name.Lifted !Operand
   | Add !Local !Operand !Operand
   | Sub !Local !Operand !Operand
   | HeapAllocate !Local !Operand
@@ -26,7 +28,7 @@ data Terminator
 data BasicBlock = BasicBlock [Instruction] !Terminator
   deriving (Show, Generic, Hashable, Persist)
 
-type Definition = Assembly.Definition BasicBlock
+type Definition = Assembly.Definition Assembly.Local BasicBlock
 
 instance Pretty Instruction where
   pretty instruction =
@@ -39,6 +41,9 @@ instance Pretty Instruction where
 
       Store dst src ->
         voidInstr "store" [dst, src]
+
+      InitGlobal dst src ->
+        "init global" <+> hsep [pretty dst, pretty src]
 
       Add dst arg1 arg2 ->
         returningInstr dst "add" [arg1, arg2]

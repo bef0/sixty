@@ -30,7 +30,8 @@ instance Pretty Name where
 
 data Operand
   = LocalOperand !Local
-  | Global !Name
+  | GlobalConstant !Name
+  | GlobalFunction !Name !Int
   | Lit !Literal
   deriving (Show, Generic, Persist, Hashable)
 
@@ -40,6 +41,7 @@ data Instruction basicBlock
   | CallVoid !Operand [Operand]
   | Load !Local !Operand
   | Store !Operand !Operand
+  | InitGlobal !Name.Lifted !Operand
   | Add !Local !Operand !Operand
   | Sub !Local !Operand !Operand
   | StackAllocate !Local !Operand
@@ -48,8 +50,8 @@ data Instruction basicBlock
   | Switch !Operand [(Int, basicBlock)] basicBlock
   deriving (Show, Generic, Persist, Hashable, Functor)
 
-data Definition basicBlock
-  = ConstantDefinition basicBlock
+data Definition constantParameters basicBlock
+  = ConstantDefinition constantParameters basicBlock
   | FunctionDefinition [Local] basicBlock
   deriving (Show, Generic, Persist, Hashable, Functor)
 
@@ -68,8 +70,11 @@ instance Pretty Operand where
       LocalOperand local ->
         pretty local
 
-      Global global ->
-        pretty global
+      GlobalConstant global ->
+        "constant" <+> pretty global
+
+      GlobalFunction global arity ->
+        "function(" <> pretty arity <> ")" <+> pretty global
 
       Lit lit ->
         pretty lit
@@ -91,6 +96,9 @@ instance Pretty basicBlock => Pretty (Instruction basicBlock) where
 
       Store dst src ->
         voidInstr "store" [dst, src]
+
+      InitGlobal dst src ->
+        "init global" <+> hsep [pretty dst, pretty src]
 
       Add dst arg1 arg2 ->
         returningInstr dst "add" [arg1, arg2]
@@ -125,14 +133,15 @@ instance Pretty basicBlock => Pretty (Instruction basicBlock) where
       returningInstr ret name args =
         pretty ret <+> "=" <+> voidInstr name args
 
-instance Pretty basicBlock => Pretty (Definition basicBlock) where
+instance (Pretty constantParameters, Pretty basicBlock) => Pretty (Definition constantParameters basicBlock) where
   pretty definition =
     case definition of
-      ConstantDefinition basicBlock ->
-        indent 2 (pretty basicBlock)
+      ConstantDefinition constantParameters basicBlock ->
+        "constant" <+> pretty constantParameters <+> "=" <> line <>
+          indent 2 (pretty basicBlock)
 
       FunctionDefinition args basicBlock ->
-        tupled (pretty <$> args) <+> "->" <> line <>
+        "function" <+> tupled (pretty <$> args) <+> "=" <> line <>
           indent 2 (pretty basicBlock)
 
 instance Pretty BasicBlock where
@@ -194,6 +203,9 @@ instructionLocals instruction =
     Assembly.Store o1 o2 ->
       operandOccurrences o1 <> operandOccurrences o2
 
+    Assembly.InitGlobal _ o ->
+      operandOccurrences o
+
     Assembly.Add l o1 o2 ->
       (IntSet.singleton l, mempty) <> operandOccurrences o1 <> operandOccurrences o2
 
@@ -218,7 +230,10 @@ operandOccurrences operand =
     Assembly.LocalOperand local ->
       (mempty, IntSet.singleton local)
 
-    Assembly.Global _ ->
+    Assembly.GlobalConstant _ ->
+      mempty
+
+    Assembly.GlobalFunction _ _ ->
       mempty
 
     Assembly.Lit _ ->

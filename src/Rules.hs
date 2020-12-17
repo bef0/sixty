@@ -8,20 +8,6 @@
 {-# language TupleSections #-}
 module Rules where
 
-import Protolude hiding ((<.>), force, moduleName, try)
-
-import Control.Exception.Lifted
-import qualified Data.HashMap.Lazy as HashMap
-import Data.HashSet (HashSet)
-import qualified Data.HashSet as HashSet
-import qualified Data.IntMap as IntMap
-import qualified Data.List as List
-import qualified Data.OrderedHashMap as OrderedHashMap
-import qualified Data.Text as Text
-import qualified Data.Text.Unsafe as Text
-import Rock
-import System.FilePath
-
 import qualified Assembler
 import qualified Builtin
 import qualified ClosureConversion
@@ -29,10 +15,20 @@ import qualified ClosureConverted.Context
 import qualified ClosureConverted.Syntax
 import qualified ClosureConverted.TypeOf as ClosureConverted
 import qualified CodeGeneration
+import Control.Exception.Lifted
 import Core.Binding (Binding)
 import qualified Core.Evaluation as Evaluation
 import qualified Core.Syntax as Syntax
 import qualified CPS
+import qualified Data.HashMap.Lazy as HashMap
+import Data.HashSet (HashSet)
+import qualified Data.HashSet as HashSet
+import qualified Data.IntMap as IntMap
+import qualified Data.List as List
+import qualified Data.OrderedHashMap as OrderedHashMap
+import qualified Data.OrderedHashSet as OrderedHashSet
+import qualified Data.Text as Text
+import qualified Data.Text.Unsafe as Text
 import qualified Elaboration
 import qualified Environment
 import Error (Error)
@@ -49,12 +45,15 @@ import qualified Parser
 import qualified Paths_sixty as Paths
 import Plicity
 import qualified Position
+import Protolude hiding ((<.>), force, moduleName, try)
 import Query
 import qualified Query.Mapped as Mapped
 import qualified Resolution
+import Rock
 import qualified Scope
 import qualified Span
 import qualified Surface.Syntax as Surface
+import System.FilePath
 import Telescope (Telescope)
 import qualified Telescope
 import Var (Var(Var))
@@ -178,6 +177,13 @@ rules sourceDirectories files readFile_ (Writer (Writer query)) =
 
               firstCandidate:_ ->
                 firstCandidate
+
+    ModuleDefinitions module_ ->
+      noError $ do
+        maybeFile <- fetch $ ModuleFile module_
+        fmap (OrderedHashSet.fromList . fold) $ forM maybeFile $ \file -> do
+          (_, _, defs) <- fetch $ ParsedFile file
+          pure $ fst . snd <$> defs
 
     ModuleHeader module_ ->
       nonInput $ do
@@ -433,6 +439,16 @@ rules sourceDirectories files readFile_ (Writer (Writer query)) =
               LambdaLifted.ConstantDefinition <$>
                 IntMap.lookup index liftedDefs
 
+    LambdaLiftedModuleDefinitions module_ ->
+      noError $ do
+        names <- fetch $ ModuleDefinitions module_
+        fmap (OrderedHashSet.fromList . concat) $ forM (toList names) $ \name -> do
+          let
+            qualifiedName =
+              Name.Qualified module_ name 
+          (_, extras) <- fetch $ LambdaLifted qualifiedName
+          pure $ Name.Lifted qualifiedName <$> 0 : IntMap.keys extras
+
     ClosureConverted name ->
       noError $ do
         maybeDef <- fetch $ LambdaLiftedDefinition name
@@ -523,12 +539,16 @@ rules sourceDirectories files readFile_ (Writer (Writer query)) =
         pure $ fold $ foreach maybeAssemblyDefinition $ \(assemblyDefinition, fresh) ->
           CPS.convertDefinition fresh name assemblyDefinition
 
-    LLVM name ->
+    CPSAssemblyModule module_ ->
       noError $ do
-        assemblyDefinitions <- fetch $ CPSAssembly name
-        forM assemblyDefinitions $ uncurry Assembler.assembleDefinition
-        -- pure $ Assembler.assembleDefinition name . fst <$> maybeAssembly
+        names <- fetch $ LambdaLiftedModuleDefinitions module_
+        cpsAssembly <- forM (toList names) $ fetch . CPSAssembly
+        pure $ CPS.convertModule module_ (concat cpsAssembly)
 
+    LLVMModule module_ ->
+      noError $ do
+        assemblyDefinitions <- fetch $ CPSAssemblyModule module_
+        pure $ Assembler.assembleModule module_ assemblyDefinitions
   where
     input :: Functor m => m a -> m ((a, TaskKind), [Error])
     input = fmap ((, mempty) . (, Input))
